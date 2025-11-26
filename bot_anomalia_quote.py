@@ -47,6 +47,76 @@ API_RETRY_DELAY = 1
 COOLDOWN_ON_DAILY_429_MIN = int(os.getenv("COOLDOWN_ON_DAILY_429_MIN", "30"))
 _last_daily_429_ts = 0
 
+# 🆕 STATISTICHE GIORNALIERE
+ENABLE_DAILY_STATS = os.getenv("ENABLE_DAILY_STATS", "true").lower() == "true"
+DAILY_REPORT_HOUR = int(os.getenv("DAILY_REPORT_HOUR", "23"))  # Ora del report (default 23:00)
+
+class DailyStats:
+    """Statistiche giornaliere"""
+    def __init__(self):
+        self.reset_date = time.strftime("%Y-%m-%d")
+        self.signals_sent = []  # Lista di segnali inviati
+        self.total_sent = 0
+        self.total_won = 0
+        self.total_lost = 0
+        self.total_pending = 0
+        self.last_report_sent = None
+    
+    def add_signal(self, match_id, home, away, league, bet_type, goal_minute, 
+                   baseline, final_quote, delta, timestamp):
+        """Aggiungi un segnale"""
+        signal = {
+            "id": match_id,
+            "home": home,
+            "away": away,
+            "league": league,
+            "bet_type": bet_type,
+            "goal_minute": goal_minute,
+            "baseline": baseline,
+            "final_quote": final_quote,
+            "delta": delta,
+            "timestamp": timestamp,
+            "status": "pending",  # pending, won, lost
+            "final_score": None,
+            "checked_at": None
+        }
+        self.signals_sent.append(signal)
+        self.total_sent += 1
+        self.total_pending += 1
+    
+    def update_signal(self, match_id, final_score, status):
+        """Aggiorna risultato di un segnale"""
+        for signal in self.signals_sent:
+            if signal["id"] == match_id and signal["status"] == "pending":
+                signal["status"] = status
+                signal["final_score"] = final_score
+                signal["checked_at"] = time.time()
+                
+                self.total_pending -= 1
+                if status == "won":
+                    self.total_won += 1
+                elif status == "lost":
+                    self.total_lost += 1
+                break
+    
+    def check_if_need_reset(self):
+        """Controlla se è un nuovo giorno"""
+        today = time.strftime("%Y-%m-%d")
+        if today != self.reset_date:
+            return True
+        return False
+    
+    def reset(self):
+        """Reset statistiche per nuovo giorno"""
+        self.reset_date = time.strftime("%Y-%m-%d")
+        self.signals_sent = []
+        self.total_sent = 0
+        self.total_won = 0
+        self.total_lost = 0
+        self.total_pending = 0
+
+daily_stats = DailyStats()
+
 # FILTRI LEGHE - Solo eSports
 LEAGUE_EXCLUDE_KEYWORDS = [
     "esoccer", "e-soccer", "cyber", "e-football", 
@@ -64,7 +134,8 @@ HEADERS = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": RAPIDAPI_HOST}
 class MatchState:
     __slots__ = ("first_seen_at", "first_seen_score", "goal_time", "goal_minute",
                  "scoring_team", "baseline_samples", "baseline", "last_quote", 
-                 "notified", "tries", "last_check", "consecutive_errors")
+                 "notified", "notified_ht_renotify", "was_ht_alert", 
+                 "tries", "last_check", "consecutive_errors")
     
     def __init__(self):
         self.first_seen_at = time.time()
@@ -76,6 +147,8 @@ class MatchState:
         self.baseline = None
         self.last_quote = None
         self.notified = False
+        self.notified_ht_renotify = False  # 🆕 Flag per re-notifica HT→FT
+        self.was_ht_alert = False  # 🆕 True se ha mandato alert OVER 1.5 HT
         self.tries = 0
         self.last_check = 0
         self.consecutive_errors = 0
@@ -190,6 +263,85 @@ def parse_price(x):
     except:
         return None
 
+def check_signal_result(signal, current_score, ht_score, current_minute):
+    """
+    Verifica se un segnale è vincente o perdente
+    Returns: 'won', 'lost', or 'pending'
+    """
+    if signal["status"] != "pending":
+        return signal["status"]
+    
+    bet_type = signal["bet_type"]
+    
+    # OVER 1.5 PRIMO TEMPO
+    if "PRIMO TEMPO" in bet_type:
+        if ht_score is None:
+            return "pending"  # HT non ancora disponibile
+        
+        ht_total = ht_score[0] + ht_score[1]
+        if ht_total >= 2:
+            return "won"
+        else:
+            return "lost"
+    
+    # OVER 2.5 FINALE
+    elif "FINALE" in bet_type:
+        if current_minute < 90:
+            return "pending"  # Partita non finita
+        
+        final_total = current_score[0] + current_score[1]
+        if final_total >= 3:
+            return "won"
+        else:
+            return "lost"
+    
+    return "pending"
+
+def send_daily_report():
+    """Invia report giornaliero"""
+    if not ENABLE_DAILY_STATS:
+        return
+    
+    win_rate = (daily_stats.total_won / daily_stats.total_sent * 100) if daily_stats.total_sent > 0 else 0
+    
+    msg = (
+        f"📊 <b>REPORT GIORNALIERO</b> 📊\n"
+        f"📅 {daily_stats.reset_date}\n\n"
+        f"📨 <b>Segnali inviati:</b> {daily_stats.total_sent}\n"
+        f"✅ <b>Vincenti:</b> {daily_stats.total_won}\n"
+        f"❌ <b>Perdenti:</b> {daily_stats.total_lost}\n"
+        f"⏳ <b>In attesa:</b> {daily_stats.total_pending}\n\n"
+        f"📈 <b>Win Rate:</b> {win_rate:.1f}%\n\n"
+    )
+    
+    # Aggiungi dettagli segnali vincenti
+    if daily_stats.total_won > 0:
+        msg += "✅ <b>VINCENTI:</b>\n"
+        for signal in daily_stats.signals_sent:
+            if signal["status"] == "won":
+                msg += f"  • {signal['home']} vs {signal['away']}\n"
+                msg += f"    {signal['bet_type']}\n"
+                if signal["final_score"]:
+                    msg += f"    Score: {signal['final_score'][0]}-{signal['final_score'][1]}\n"
+        msg += "\n"
+    
+    # Aggiungi dettagli segnali perdenti
+    if daily_stats.total_lost > 0:
+        msg += "❌ <b>PERDENTI:</b>\n"
+        for signal in daily_stats.signals_sent:
+            if signal["status"] == "lost":
+                msg += f"  • {signal['home']} vs {signal['away']}\n"
+                msg += f"    {signal['bet_type']}\n"
+                if signal["final_score"]:
+                    msg += f"    Score: {signal['final_score'][0]}-{signal['final_score'][1]}\n"
+        msg += "\n"
+    
+    msg += f"🔄 Statistiche resettate per domani!"
+    
+    send_telegram_message(msg)
+    logger.info("📊 Report giornaliero inviato")
+    daily_stats.last_report_sent = time.time()
+
 # =========================
 # API
 # =========================
@@ -238,7 +390,14 @@ def get_live_matches_with_odds():
         score_home = score_a.get("f", "0")
         score_away = score_b.get("f", "0")
         
+        # 🆕 Score primo tempo
+        score_1h_home = score_a.get("1h")
+        score_1h_away = score_b.get("1h")
+        
         cur_score = parse_score_tuple(score_home, score_away)
+        ht_score = None
+        if score_1h_home is not None and score_1h_away is not None:
+            ht_score = parse_score_tuple(str(score_1h_home), str(score_1h_away))
         
         timer = match.get("timer", "")
         current_minute = parse_timer_to_minutes(timer)
@@ -263,6 +422,7 @@ def get_live_matches_with_odds():
             "away": away,
             "league": league,
             "score": cur_score,
+            "ht_score": ht_score,  # 🆕 Score HT
             "timer": timer,
             "minute": current_minute,
             "signature": signature,
@@ -302,10 +462,51 @@ def main_loop():
             
             if _loop % 30 == 1:
                 zero_zero = sum(1 for m in live if m["score"] == (0, 0))
-                logger.info("📊 %d live | %d 0-0 | %d monitored", 
-                           len(live), zero_zero, len(match_state))
+                logger.info("📊 %d live | %d 0-0 | %d monitored | Stats: %d sent, %d won, %d lost", 
+                           len(live), zero_zero, len(match_state),
+                           daily_stats.total_sent, daily_stats.total_won, daily_stats.total_lost)
+            
+            # 🆕 Controllo reset giornaliero
+            if daily_stats.check_if_need_reset():
+                send_daily_report()
+                daily_stats.reset()
+                logger.info("🔄 Statistiche resettate per nuovo giorno")
+            
+            # 🆕 Controllo invio report ore 23:00
+            current_hour = int(time.strftime("%H"))
+            if (ENABLE_DAILY_STATS and current_hour == DAILY_REPORT_HOUR 
+                and daily_stats.last_report_sent is None):
+                if daily_stats.total_sent > 0:
+                    send_daily_report()
 
             now = time.time()
+            
+            # 🆕 Aggiorna risultati segnali pending
+            if ENABLE_DAILY_STATS:
+                for signal in daily_stats.signals_sent:
+                    if signal["status"] == "pending":
+                        # Cerca il match corrispondente
+                        for match in live:
+                            if match["id"] == signal["id"]:
+                                result = check_signal_result(
+                                    signal, 
+                                    match["score"], 
+                                    match["ht_score"],
+                                    match["minute"]
+                                )
+                                if result != "pending":
+                                    daily_stats.update_signal(
+                                        signal["id"], 
+                                        match["score"], 
+                                        result
+                                    )
+                                    status_emoji = "✅" if result == "won" else "❌"
+                                    logger.info("%s Segnale %s: %s vs %s (%s) - Score: %d-%d", 
+                                               status_emoji, result.upper(),
+                                               signal["home"], signal["away"],
+                                               signal["bet_type"],
+                                               match["score"][0], match["score"][1])
+                                break
 
             for match in live:
                 eid = match["id"]
@@ -313,6 +514,7 @@ def main_loop():
                 away = match["away"]
                 league = match["league"]
                 cur_score = match["score"]
+                ht_score = match["ht_score"]
                 current_minute = match["minute"]
                 home_price = match["home_price"]
                 away_price = match["away_price"]
@@ -323,6 +525,33 @@ def main_loop():
                     match_state[eid].first_seen_score = cur_score
 
                 st = match_state[eid]
+
+                # 🆕 CONTROLLO RE-NOTIFICA HT→FT
+                # Se ha mandato alert OVER 1.5 HT e ora siamo nel 2° tempo
+                if (st.notified and st.was_ht_alert and not st.notified_ht_renotify 
+                    and ht_score is not None and current_minute > 45):
+                    
+                    # Verifica se HT è finito 1-0 o 0-1
+                    if ht_score in [(1, 0), (0, 1)]:
+                        team_name = home if st.scoring_team == "home" else away
+                        team_label = "1" if st.scoring_team == "home" else "2"
+                        
+                        msg = (
+                            f"🔄 <b>AGGIORNAMENTO</b> 🔄\n\n"
+                            f"🏆 {league}\n"
+                            f"⚽ <b>{home}</b> vs <b>{away}</b>\n"
+                            f"📊 HT: <b>{ht_score[0]}-{ht_score[1]}</b>\n"
+                            f"⏱ Ora: {current_minute}' | Score: {cur_score[0]}-{cur_score[1]}\n\n"
+                            f"✅ Primo tempo finito {ht_score[0]}-{ht_score[1]}\n"
+                            f"💡 Team <b>{team_label}</b> ({team_name}) ancora in vantaggio\n\n"
+                            f"🎯 <b>GIOCA: OVER 2.5 FINALE</b> 🎯"
+                        )
+                        
+                        if send_telegram_message(msg):
+                            logger.info("🔄 RE-NOTIFICA OVER 2.5 FT: %s vs %s (HT era %d-%d)", 
+                                       home, away, ht_score[0], ht_score[1])
+                        
+                        st.notified_ht_renotify = True
 
                 # STEP 1: Rileva goal
                 if st.goal_time is None:
@@ -420,6 +649,7 @@ def main_loop():
                     if st.goal_minute <= MINUTE_THRESHOLD_HT:
                         bet_type = "OVER 1.5 PRIMO TEMPO"
                         emoji = "⏰"
+                        st.was_ht_alert = True  # 🆕 Marca come alert HT
                     else:
                         bet_type = "OVER 2.5 FINALE"
                         emoji = "🎯"
@@ -439,6 +669,21 @@ def main_loop():
                     if send_telegram_message(msg):
                         logger.info("✅ ALERT %d': %s vs %s | %.2f→%.2f (+%.2f)", 
                                    current_minute, home, away, st.baseline, scorer_price, delta)
+                        
+                        # 🆕 Traccia segnale nelle statistiche
+                        if ENABLE_DAILY_STATS:
+                            daily_stats.add_signal(
+                                match_id=eid,
+                                home=home,
+                                away=away,
+                                league=league,
+                                bet_type=bet_type,
+                                goal_minute=st.goal_minute,
+                                baseline=st.baseline,
+                                final_quote=scorer_price,
+                                delta=delta,
+                                timestamp=now
+                            )
                     
                     st.notified = True
                 
@@ -493,7 +738,10 @@ def main():
         f"✅ Quote {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
         f"✅ Rise: <b>+{MIN_RISE:.2f}</b> to <b>+{MAX_RISE:.2f}</b>\n\n"
         f"🎯 Goal ≤{MINUTE_THRESHOLD_HT}' → <b>OVER 1.5 HT</b>\n"
-        f"🎯 Goal >{MINUTE_THRESHOLD_HT}' → <b>OVER 2.5 FT</b>\n\n"
+        f"🎯 Goal >{MINUTE_THRESHOLD_HT}' → <b>OVER 2.5 FT</b>\n"
+        f"🔄 <b>Re-notifica HT→FT automatica</b>\n\n"
+        f"📊 <b>Statistiche giornaliere: {'ON' if ENABLE_DAILY_STATS else 'OFF'}</b>\n"
+        f"{'📅 Report automatico ore ' + str(DAILY_REPORT_HOUR) + ':00' if ENABLE_DAILY_STATS else ''}\n\n"
         f"🔍 Monitoraggio attivo!"
     )
     

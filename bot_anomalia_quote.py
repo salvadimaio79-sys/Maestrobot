@@ -93,7 +93,7 @@ class MatchState:
                  "scoring_team", "baseline_samples", "baseline", "last_quote", 
                  "notified", "notified_ht", "ht_score_1_0_or_0_1", "tries", 
                  "last_check", "consecutive_errors", "last_seen_loop", 
-                 "last_seen_minute", "score_stable_count")
+                 "last_seen_minute")
     
     def __init__(self):
         self.first_seen_at = time.time()
@@ -112,7 +112,6 @@ class MatchState:
         self.consecutive_errors = 0
         self.last_seen_loop = 0
         self.last_seen_minute = 0
-        self.score_stable_count = 0  # 🆕 Conta quante volte vediamo lo stesso score
 
 match_state = {}
 _loop = 0
@@ -484,15 +483,6 @@ def main_loop():
                 st = match_state[eid]
                 st.last_seen_loop = _loop
 
-                # 🆕 VALIDAZIONE SCORE: deve essere stabile per almeno 2 loop
-                if st.first_seen_score is not None:
-                    if cur_score == st.first_seen_score:
-                        st.score_stable_count += 1
-                    else:
-                        # Score cambiato, reset
-                        st.first_seen_score = cur_score
-                        st.score_stable_count = 1
-
                 # 🆕 CONTROLLO HT->FT RE-NOTIFICA
                 # Se abbiamo già mandato notifica HT e ora siamo nel 2° tempo con 1-0 o 0-1
                 if st.notified and not st.notified_ht and current_minute > 45:
@@ -524,13 +514,15 @@ def main_loop():
                         
                         st.notified_ht = True
 
-                # STEP 1: Rileva goal (solo se score stabile)
-                if st.goal_time is None and st.score_stable_count >= 2:
+                # STEP 1: Rileva goal
+                if st.goal_time is None:
                     first_score = st.first_seen_score or (0, 0)
                     
+                    # Ignora partite già con goal
                     if first_score != (0, 0):
                         continue
                     
+                    # Rileva SUBITO il goal (no stability check)
                     if cur_score == (1, 0):
                         st.goal_time = now
                         st.goal_minute = current_minute
@@ -546,8 +538,8 @@ def main_loop():
                                    current_minute, home, away, league)
                         continue
                     else:
-                        # 🆕 Log partite 0-0 ogni 10 minuti
-                        if _loop % 150 == 0 and current_minute > 0:  # ~10 min
+                        # Log partite 0-0 ogni 10 minuti
+                        if _loop % 150 == 0 and current_minute > 0:
                             logger.info("👀 Watching 0-0: %s vs %s (%d') | %s", 
                                        home, away, current_minute, league)
                         continue

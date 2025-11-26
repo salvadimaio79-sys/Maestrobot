@@ -431,6 +431,19 @@ def main_loop():
 
             if _loop % 30 == 1:
                 logger.info("📊 %d live | %d monitored", len(live), len(match_state))
+                
+                # 🆕 Stats dettagliate ogni 5 minuti (~75 loop = 5 min)
+                if _loop % 75 == 1:
+                    zero_zero = sum(1 for m in live if m["score"] == (0, 0))
+                    with_goal = sum(1 for st in match_state.values() if st.goal_time is not None)
+                    monitoring = sum(1 for st in match_state.values() if st.baseline is not None)
+                    
+                    logger.info("=" * 50)
+                    logger.info("📈 STATUS REPORT:")
+                    logger.info("   • %d partite 0-0 in corso", zero_zero)
+                    logger.info("   • %d goal rilevati (0-0→1-0/0-1)", with_goal)
+                    logger.info("   • %d quote in monitoraggio attivo", monitoring)
+                    logger.info("=" * 50)
 
             now = time.time()
 
@@ -533,6 +546,10 @@ def main_loop():
                                    current_minute, home, away, league)
                         continue
                     else:
+                        # 🆕 Log partite 0-0 ogni 10 minuti
+                        if _loop % 150 == 0 and current_minute > 0:  # ~10 min
+                            logger.info("👀 Watching 0-0: %s vs %s (%d') | %s", 
+                                       home, away, current_minute, league)
                         continue
 
                 # STEP 2: Verifica che abbiamo rilevato un goal
@@ -553,6 +570,11 @@ def main_loop():
 
                 # STEP 4: Attesa post-goal
                 if now - st.goal_time < WAIT_AFTER_GOAL_SEC:
+                    # 🆕 Log attesa
+                    time_left = int(WAIT_AFTER_GOAL_SEC - (now - st.goal_time))
+                    if time_left % 5 == 0:  # Log ogni 5 secondi
+                        logger.info("⏳ Waiting %ds: %s vs %s (%d')", 
+                                   time_left, home, away, current_minute)
                     continue
 
                 # STEP 5: Throttling per match
@@ -577,7 +599,8 @@ def main_loop():
                 # STEP 6: BASELINE
                 if st.baseline is None:
                     if scorer_price < BASELINE_MIN or scorer_price > BASELINE_MAX:
-                        logger.info("❌ %.2f fuori range: %s vs %s", scorer_price, home, away)
+                        logger.info("❌ %.2f fuori range [%.2f-%.2f]: %s vs %s", 
+                                   scorer_price, BASELINE_MIN, BASELINE_MAX, home, away)
                         st.notified = True
                         continue
                     
@@ -585,12 +608,13 @@ def main_loop():
                     
                     if len(st.baseline_samples) >= BASELINE_SAMPLES:
                         st.baseline = min(st.baseline_samples)
-                        logger.info("✅ Baseline %.2f (%d'): %s vs %s", 
+                        logger.info("✅ Baseline %.2f (%d'): %s vs %s | Inizio monitoraggio!", 
                                    st.baseline, current_minute, home, away)
                     else:
-                        logger.info("📊 Sample %d/%d: %.2f (%d') | %s vs %s", 
+                        logger.info("📊 Sample %d/%d: %.2f (%d') | %s vs %s | Ancora %d sample...", 
                                    len(st.baseline_samples), BASELINE_SAMPLES, 
-                                   scorer_price, current_minute, home, away)
+                                   scorer_price, current_minute, home, away,
+                                   BASELINE_SAMPLES - len(st.baseline_samples))
                     
                     st.last_quote = scorer_price
                     continue
@@ -599,9 +623,14 @@ def main_loop():
                 delta = scorer_price - st.baseline
                 st.last_quote = scorer_price
 
-                # Log variazioni anche se non trigger alert
-                if delta >= MIN_RISE * 0.7:
-                    logger.info("📈 %d' | %s vs %s: %.2f (base %.2f, Δ+%.3f)", 
+                # 🆕 Log TUTTE le variazioni
+                if delta >= 0:
+                    logger.info("📊 %d' | %s vs %s: %.2f (base %.2f, Δ+%.3f) %s", 
+                               current_minute, home, away, scorer_price, st.baseline, delta,
+                               "🔥 VICINO!" if delta >= MIN_RISE * 0.8 else "")
+                else:
+                    # Quota scesa
+                    logger.info("📉 %d' | %s vs %s: %.2f (base %.2f, Δ%.3f)", 
                                current_minute, home, away, scorer_price, st.baseline, delta)
 
                 # STEP 8: Alert con VALIDAZIONE SOGLIA MASSIMA 🆕

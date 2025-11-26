@@ -489,7 +489,11 @@ def main_loop():
                     else:
                         continue
 
-                # STEP 2: Verifica score (deve essere ancora 1-0 o 0-1)
+                # STEP 2: Verifica che abbiamo rilevato un goal
+                if st.goal_time is None:
+                    continue
+
+                # STEP 3: Verifica score (deve essere ancora 1-0 o 0-1)
                 expected = (1, 0) if st.scoring_team == "home" else (0, 1)
                 if cur_score != expected:
                     # Score cambiato! Forse 1-1 o altro goal
@@ -501,11 +505,11 @@ def main_loop():
                 if st.notified:
                     continue
 
-                # STEP 3: Attesa post-goal
+                # STEP 4: Attesa post-goal
                 if now - st.goal_time < WAIT_AFTER_GOAL_SEC:
                     continue
 
-                # STEP 4: Throttling per match
+                # STEP 5: Throttling per match
                 if now - st.last_check < BASELINE_SAMPLE_INTERVAL:
                     continue
 
@@ -524,7 +528,7 @@ def main_loop():
 
                 st.consecutive_errors = 0
 
-                # STEP 5: BASELINE
+                # STEP 6: BASELINE
                 if st.baseline is None:
                     if scorer_price < BASELINE_MIN or scorer_price > BASELINE_MAX:
                         logger.info("❌ %.2f fuori range: %s vs %s", scorer_price, home, away)
@@ -545,7 +549,7 @@ def main_loop():
                     st.last_quote = scorer_price
                     continue
 
-                # STEP 6: Monitora
+                # STEP 7: Monitora
                 delta = scorer_price - st.baseline
                 st.last_quote = scorer_price
 
@@ -554,7 +558,7 @@ def main_loop():
                     logger.info("📈 %d' | %s vs %s: %.2f (base %.2f, Δ+%.3f)", 
                                current_minute, home, away, scorer_price, st.baseline, delta)
 
-                # STEP 7: Alert con VALIDAZIONE SOGLIA MASSIMA 🆕
+                # STEP 8: Alert con VALIDAZIONE SOGLIA MASSIMA 🆕
                 if delta >= MIN_RISE and delta <= MAX_RISE:  # 🆕 Controllo MAX!
                     team_name = home if st.scoring_team == "home" else away
                     team_label = "1" if st.scoring_team == "home" else "2"

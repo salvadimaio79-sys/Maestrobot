@@ -57,13 +57,31 @@ MAX_API_RETRIES = 2
 API_RETRY_DELAY = 1
 
 # FILTRI LEGHE
+ENABLE_LEAGUE_FILTER = os.getenv("ENABLE_LEAGUE_FILTER", "true").lower() == "true"
+
+# Esclude SOLO altri sport (non calcio)
+# TUTTO IL CALCIO È INCLUSO: senior, giovanili, femminile, riserve, etc.
 LEAGUE_EXCLUDE_KEYWORDS = [
-    "esoccer", "8 mins", "volta", "h2h gg", "virtual", 
-    "baller", "30 mins", "20 mins", "10 mins", "12 mins",
-    "cyber", "e-football", "esports", "fifa", "pes",
-    "simulated", "gtworld", "6 mins", "15 mins",
-    "torneo regional amateur", "regional amateur"
+    # eSports/Virtual (NON calcio reale)
+    "esoccer", "e-soccer", "e soccer",
+    "cyber", "e-football", 
+    "esports", "e-sports",
+    "fifa", "pes", "efootball",
+    "virtual", "simulated",
+    "gtworld", "baller",
+    
+    # Partite non standard (troppo brevi)
+    "6 mins", "8 mins", "10 mins", "12 mins", 
+    "15 mins", "20 mins", "30 mins",
+    
+    # Altri sport
+    "h2h gg",  # Head to head games
 ]
+
+# Se vuoi escludere anche giovanili/riserve, imposta questa variabile
+EXCLUDE_YOUTH = os.getenv("EXCLUDE_YOUTH", "false").lower() == "true"
+if EXCLUDE_YOUTH:
+    LEAGUE_EXCLUDE_KEYWORDS.extend(["u19", "u23", "u21", "u20", "u18", "u17", "reserve", "riserve", "primavera"])
 
 HEADERS = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": RAPIDAPI_HOST}
 
@@ -262,6 +280,13 @@ def get_live_matches_with_odds():
     raw_events = data.get("result") or []
     events = []
     seen_signatures = set()
+    
+    # 🆕 Contatori per debug
+    total_raw = len(raw_events)
+    filtered_not_in_play = 0
+    filtered_excluded_league = 0
+    filtered_no_odds = 0
+    filtered_duplicate = 0
 
     for match in raw_events:
         # Estrai dati base
@@ -271,13 +296,16 @@ def get_live_matches_with_odds():
         
         # Se non in play, salta
         if not in_play:
+            filtered_not_in_play += 1
             continue
         
         # Championship
         champ = match.get("championship") or {}
         league = champ.get("name", "").strip()
         
-        if not league or is_excluded_league(league):
+        if not league or (ENABLE_LEAGUE_FILTER and is_excluded_league(league)):
+            if league and ENABLE_LEAGUE_FILTER:
+                filtered_excluded_league += 1
             continue
 
         # Teams
@@ -319,9 +347,15 @@ def get_live_matches_with_odds():
         # Signature
         signature = create_match_signature(home, away, league)
         if signature in seen_signatures:
+            filtered_duplicate += 1
             continue
         
         seen_signatures.add(signature)
+        
+        # 🆕 Se non ci sono quote, logga e salta
+        if home_price is None and away_price is None:
+            filtered_no_odds += 1
+            continue
 
         events.append({
             "id": event_id,
@@ -339,6 +373,18 @@ def get_live_matches_with_odds():
                 "away": away_price
             }
         })
+
+    # 🆕 Log dettagliato
+    if total_raw > 0 and _loop % 30 == 1:
+        logger.info("🔍 API Filter Stats: %d total → %d accepted", total_raw, len(events))
+        if filtered_not_in_play:
+            logger.info("   • %d not in play", filtered_not_in_play)
+        if filtered_excluded_league:
+            logger.info("   • %d excluded leagues", filtered_excluded_league)
+        if filtered_no_odds:
+            logger.info("   • %d no odds available", filtered_no_odds)
+        if filtered_duplicate:
+            logger.info("   • %d duplicates", filtered_duplicate)
 
     return events
 
@@ -637,13 +683,17 @@ def main():
     logger.info("   • Minute HT threshold: ≤%d'", MINUTE_THRESHOLD_HT)
     logger.info("   • Check: %ds", CHECK_INTERVAL)
     logger.info("   • Samples: %d (ogni %ds)", BASELINE_SAMPLES, BASELINE_SAMPLE_INTERVAL)
+    logger.info("   • League filter: %s", "ON" if ENABLE_LEAGUE_FILTER else "OFF (monitoring ALL)")
     logger.info("="*60)
     
     send_telegram_message(
         f"🤖 <b>Bot QUOTE JUMP v3.0</b> ⚡\n\n"
-        f"✅ 0-0 → 1-0/0-1\n"
-        f"✅ Quote {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
-        f"✅ Rise: <b>+{MIN_RISE:.2f}</b> to <b>+{MAX_RISE:.2f}</b>\n"
+        f"⚽ <b>TUTTO IL CALCIO LIVE</b>\n"
+        f"✅ Senior, U19/U23, Femminile, Reserve\n"
+        f"✅ Tutte le leghe mondiali\n"
+        f"❌ Solo eSports/Virtual esclusi\n\n"
+        f"📊 Quote {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
+        f"📈 Rise: <b>+{MIN_RISE:.2f}</b> to <b>+{MAX_RISE:.2f}</b>\n"
         f"⚡ Wait <b>{WAIT_AFTER_GOAL_SEC}s</b> post-goal\n\n"
         f"🎯 <b>DUAL MODE:</b>\n"
         f"⏰ Goal ≤{MINUTE_THRESHOLD_HT}' → <b>OVER 1.5 HT</b>\n"

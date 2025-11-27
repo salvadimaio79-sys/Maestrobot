@@ -275,19 +275,24 @@ def check_signal_result(signal, current_score, ht_score, current_minute):
     
     # OVER 1.5 PRIMO TEMPO
     if "PRIMO TEMPO" in bet_type:
-        if ht_score is None:
-            return "pending"  # HT non ancora disponibile
-        
-        ht_total = ht_score[0] + ht_score[1]
-        if ht_total >= 2:
-            return "won"
-        else:
-            return "lost"
+        # Se siamo oltre il 45' minuto, controlla HT
+        if current_minute >= 45:
+            if ht_score is not None:
+                ht_total = ht_score[0] + ht_score[1]
+                if ht_total >= 2:
+                    return "won"
+                else:
+                    return "lost"
+            # Fallback: se non c'è HT ma siamo nel 2° tempo, usa score corrente
+            elif current_minute > 45:
+                # Assume che il primo tempo sia finito
+                return "lost" if (current_score[0] + current_score[1]) < 2 else "won"
+        return "pending"
     
     # OVER 2.5 FINALE
     elif "FINALE" in bet_type:
         if current_minute < 90:
-            return "pending"  # Partita non finita
+            return "pending"
         
         final_total = current_score[0] + current_score[1]
         if final_total >= 3:
@@ -506,6 +511,37 @@ def main_loop():
                                                signal["home"], signal["away"],
                                                signal["bet_type"],
                                                match["score"][0], match["score"][1])
+                                    
+                                    # 🆕 RE-NOTIFICA se era OVER 1.5 HT e LOST con score 1-0 o 0-1
+                                    if (result == "lost" and "PRIMO TEMPO" in signal["bet_type"]
+                                        and match["score"] in [(1, 0), (0, 1)]
+                                        and match["minute"] > 45):
+                                        
+                                        # Trova il match state per ottenere team info
+                                        if signal["id"] in match_state:
+                                            st = match_state[signal["id"]]
+                                            if not st.notified_ht_renotify:
+                                                team_label = "1" if st.scoring_team == "home" else "2"
+                                                team_name = signal["home"] if st.scoring_team == "home" else signal["away"]
+                                                
+                                                msg = (
+                                                    f"🔄 <b>AGGIORNAMENTO</b> 🔄\n\n"
+                                                    f"🏆 {signal['league']}\n"
+                                                    f"⚽ <b>{signal['home']}</b> vs <b>{signal['away']}</b>\n"
+                                                    f"📊 HT: <b>{match['score'][0]}-{match['score'][1]}</b>\n"
+                                                    f"⏱ Ora: {match['minute']}'\n\n"
+                                                    f"✅ Primo tempo finito {match['score'][0]}-{match['score'][1]}\n"
+                                                    f"💡 Team <b>{team_label}</b> ({team_name}) ancora in vantaggio\n\n"
+                                                    f"🎯 <b>GIOCA: OVER 2.5 FINALE</b> 🎯"
+                                                )
+                                                
+                                                if send_telegram_message(msg):
+                                                    logger.info("🔄 RE-NOTIFICA OVER 2.5 FT: %s vs %s (HT: %d-%d)", 
+                                                               signal["home"], signal["away"],
+                                                               match["score"][0], match["score"][1])
+                                                
+                                                st.notified_ht_renotify = True
+                                
                                 break
 
             for match in live:
@@ -525,33 +561,6 @@ def main_loop():
                     match_state[eid].first_seen_score = cur_score
 
                 st = match_state[eid]
-
-                # 🆕 CONTROLLO RE-NOTIFICA HT→FT
-                # Se ha mandato alert OVER 1.5 HT e ora siamo nel 2° tempo
-                if (st.notified and st.was_ht_alert and not st.notified_ht_renotify 
-                    and ht_score is not None and current_minute > 45):
-                    
-                    # Verifica se HT è finito 1-0 o 0-1
-                    if ht_score in [(1, 0), (0, 1)]:
-                        team_name = home if st.scoring_team == "home" else away
-                        team_label = "1" if st.scoring_team == "home" else "2"
-                        
-                        msg = (
-                            f"🔄 <b>AGGIORNAMENTO</b> 🔄\n\n"
-                            f"🏆 {league}\n"
-                            f"⚽ <b>{home}</b> vs <b>{away}</b>\n"
-                            f"📊 HT: <b>{ht_score[0]}-{ht_score[1]}</b>\n"
-                            f"⏱ Ora: {current_minute}' | Score: {cur_score[0]}-{cur_score[1]}\n\n"
-                            f"✅ Primo tempo finito {ht_score[0]}-{ht_score[1]}\n"
-                            f"💡 Team <b>{team_label}</b> ({team_name}) ancora in vantaggio\n\n"
-                            f"🎯 <b>GIOCA: OVER 2.5 FINALE</b> 🎯"
-                        )
-                        
-                        if send_telegram_message(msg):
-                            logger.info("🔄 RE-NOTIFICA OVER 2.5 FT: %s vs %s (HT era %d-%d)", 
-                                       home, away, ht_score[0], ht_score[1])
-                        
-                        st.notified_ht_renotify = True
 
                 # STEP 1: Rileva goal
                 if st.goal_time is None:

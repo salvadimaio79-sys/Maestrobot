@@ -32,11 +32,11 @@ MAX_RISE        = float(os.getenv("MAX_RISE", "0.30"))
 BASELINE_MIN    = float(os.getenv("BASELINE_MIN", "1.30"))
 BASELINE_MAX    = float(os.getenv("BASELINE_MAX", "1.90"))
 CHECK_INTERVAL  = int(os.getenv("CHECK_INTERVAL_SECONDS", "4"))
-WAIT_AFTER_GOAL_SEC = int(os.getenv("WAIT_AFTER_GOAL_SEC", "20"))
+WAIT_AFTER_GOAL_SEC = int(os.getenv("WAIT_AFTER_GOAL_SEC", "10"))  # 🔥 RIDOTTO a 10s!
 
 # Baseline sampling
 BASELINE_SAMPLES = int(os.getenv("BASELINE_SAMPLES", "2"))
-BASELINE_SAMPLE_INTERVAL = int(os.getenv("BASELINE_SAMPLE_INTERVAL", "6"))
+BASELINE_SAMPLE_INTERVAL = int(os.getenv("BASELINE_SAMPLE_INTERVAL", "4"))  # 🔥 RIDOTTO a 4s!
 
 # Minuto soglia HT/FT
 MINUTE_THRESHOLD_HT = int(os.getenv("MINUTE_THRESHOLD_HT", "25"))
@@ -135,7 +135,8 @@ class MatchState:
     __slots__ = ("first_seen_at", "first_seen_score", "goal_time", "goal_minute",
                  "scoring_team", "baseline_samples", "baseline", "last_quote", 
                  "notified", "notified_ht_renotify", "was_ht_alert", 
-                 "tries", "last_check", "consecutive_errors")
+                 "tries", "last_check", "consecutive_errors",
+                 "pending_goal_score", "pending_goal_count", "pre_goal_quote")
     
     def __init__(self):
         self.first_seen_at = time.time()
@@ -147,11 +148,14 @@ class MatchState:
         self.baseline = None
         self.last_quote = None
         self.notified = False
-        self.notified_ht_renotify = False  # 🆕 Flag per re-notifica HT→FT
-        self.was_ht_alert = False  # 🆕 True se ha mandato alert OVER 1.5 HT
+        self.notified_ht_renotify = False
+        self.was_ht_alert = False
         self.tries = 0
         self.last_check = 0
         self.consecutive_errors = 0
+        self.pending_goal_score = None  # 🆕 Goal in attesa di conferma
+        self.pending_goal_count = 0     # 🆕 Volte consecutive visto
+        self.pre_goal_quote = None      # 🆕 Quota PRIMA del goal (per verifica)
 
 match_state = {}
 _loop = 0
@@ -513,34 +517,36 @@ def main_loop():
                                                match["score"][0], match["score"][1])
                                     
                                     # 🆕 RE-NOTIFICA se era OVER 1.5 HT e LOST con score 1-0 o 0-1
-                                    if (result == "lost" and "PRIMO TEMPO" in signal["bet_type"]
-                                        and match["score"] in [(1, 0), (0, 1)]
-                                        and match["minute"] > 45):
+                                    if (result == "lost" and "PRIMO TEMPO" in signal["bet_type"]):
                                         
-                                        # Trova il match state per ottenere team info
-                                        if signal["id"] in match_state:
-                                            st = match_state[signal["id"]]
-                                            if not st.notified_ht_renotify:
-                                                team_label = "1" if st.scoring_team == "home" else "2"
-                                                team_name = signal["home"] if st.scoring_team == "home" else signal["away"]
-                                                
-                                                msg = (
-                                                    f"🔄 <b>AGGIORNAMENTO</b> 🔄\n\n"
-                                                    f"🏆 {signal['league']}\n"
-                                                    f"⚽ <b>{signal['home']}</b> vs <b>{signal['away']}</b>\n"
-                                                    f"📊 HT: <b>{match['score'][0]}-{match['score'][1]}</b>\n"
-                                                    f"⏱ Ora: {match['minute']}'\n\n"
-                                                    f"✅ Primo tempo finito {match['score'][0]}-{match['score'][1]}\n"
-                                                    f"💡 Team <b>{team_label}</b> ({team_name}) ancora in vantaggio\n\n"
-                                                    f"🎯 <b>GIOCA: OVER 2.5 FINALE</b> 🎯"
-                                                )
-                                                
-                                                if send_telegram_message(msg):
-                                                    logger.info("🔄 RE-NOTIFICA OVER 2.5 FT: %s vs %s (HT: %d-%d)", 
-                                                               signal["home"], signal["away"],
-                                                               match["score"][0], match["score"][1])
-                                                
-                                                st.notified_ht_renotify = True
+                                        # Verifica score: usa HT se disponibile, altrimenti current score
+                                        ht_final = match["ht_score"] if match["ht_score"] else match["score"]
+                                        
+                                        if ht_final in [(1, 0), (0, 1)]:
+                                            # Trova il match state per ottenere team info
+                                            if signal["id"] in match_state:
+                                                st = match_state[signal["id"]]
+                                                if not st.notified_ht_renotify:
+                                                    team_label = "1" if st.scoring_team == "home" else "2"
+                                                    team_name = signal["home"] if st.scoring_team == "home" else signal["away"]
+                                                    
+                                                    msg = (
+                                                        f"🔄 <b>AGGIORNAMENTO</b> 🔄\n\n"
+                                                        f"🏆 {signal['league']}\n"
+                                                        f"⚽ <b>{signal['home']}</b> vs <b>{signal['away']}</b>\n"
+                                                        f"📊 HT: <b>{ht_final[0]}-{ht_final[1]}</b>\n"
+                                                        f"⏱ 2° Tempo in corso\n\n"
+                                                        f"✅ Primo tempo finito {ht_final[0]}-{ht_final[1]}\n"
+                                                        f"💡 Team <b>{team_label}</b> ({team_name}) ancora in vantaggio\n\n"
+                                                        f"🎯 <b>GIOCA: OVER 2.5 FINALE</b> 🎯"
+                                                    )
+                                                    
+                                                    if send_telegram_message(msg):
+                                                        logger.info("🔄 RE-NOTIFICA OVER 2.5 FT: %s vs %s (HT: %d-%d)", 
+                                                                   signal["home"], signal["away"],
+                                                                   ht_final[0], ht_final[1])
+                                                    
+                                                    st.notified_ht_renotify = True
                                 
                                 break
 
@@ -562,28 +568,45 @@ def main_loop():
 
                 st = match_state[eid]
 
-                # STEP 1: Rileva goal
+                # STEP 1: Rileva goal CON CONFERMA (2 loop consecutivi)
                 if st.goal_time is None:
                     first_score = st.first_seen_score or (0, 0)
                     
                     if first_score != (0, 0):
                         continue
                     
-                    if cur_score == (1, 0):
-                        st.goal_time = now
-                        st.goal_minute = current_minute
-                        st.scoring_team = "home"
-                        logger.info("⚽ GOAL %d': %s vs %s (1-0) | %s", 
-                                   current_minute, home, away, league)
-                        continue
-                    elif cur_score == (0, 1):
-                        st.goal_time = now
-                        st.goal_minute = current_minute
-                        st.scoring_team = "away"
-                        logger.info("⚽ GOAL %d': %s vs %s (0-1) | %s", 
-                                   current_minute, home, away, league)
+                    # Controlla se vediamo 1-0 o 0-1
+                    if cur_score in [(1, 0), (0, 1)]:
+                        # Se è lo stesso score della volta scorsa, aumenta counter
+                        if st.pending_goal_score == cur_score:
+                            st.pending_goal_count += 1
+                            
+                            # CONFERMA: visto 2 volte consecutive
+                            if st.pending_goal_count >= 2:
+                                st.goal_time = now
+                                st.goal_minute = current_minute
+                                st.scoring_team = "home" if cur_score == (1, 0) else "away"
+                                logger.info("⚽ GOAL CONFERMATO %d': %s vs %s (%d-%d) | %s", 
+                                           current_minute, home, away, 
+                                           cur_score[0], cur_score[1], league)
+                            else:
+                                logger.info("⏳ Goal in attesa conferma (%d/2): %s vs %s (%d-%d)",
+                                           st.pending_goal_count, home, away,
+                                           cur_score[0], cur_score[1])
+                        else:
+                            # Primo rilevamento o score cambiato
+                            st.pending_goal_score = cur_score
+                            st.pending_goal_count = 1
+                            logger.info("⏳ Goal rilevato (1/2): %s vs %s (%d-%d) - attendo conferma",
+                                       home, away, cur_score[0], cur_score[1])
                         continue
                     else:
+                        # Reset se torna 0-0 o altro
+                        if st.pending_goal_score is not None:
+                            logger.info("❌ Falso positivo annullato: %s vs %s (ora %d-%d)",
+                                       home, away, cur_score[0], cur_score[1])
+                            st.pending_goal_score = None
+                            st.pending_goal_count = 0
                         continue
 
                 # STEP 2: Verifica score non cambiato

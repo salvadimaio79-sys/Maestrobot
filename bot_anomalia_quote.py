@@ -709,14 +709,14 @@ def main_loop():
                         logger.info("✅ ALERT %d': %s vs %s | %.2f→%.2f (+%.2f) | OVER 2.5 FT | €%d", 
                                    current_minute, home, away, st.baseline, scorer_price, delta, STAKE_FT)
                         
-                        # 🆕 Traccia segnale nelle statistiche
+                        # Traccia segnale nelle statistiche
                         if ENABLE_DAILY_STATS:
                             daily_stats.add_signal(
                                 match_id=eid,
                                 home=home,
                                 away=away,
                                 league=league,
-                                bet_type=bet_type,
+                                bet_type="OVER 2.5 FINALE",  # 🔥 FIX: stringa fissa
                                 goal_minute=st.goal_minute,
                                 baseline=st.baseline,
                                 final_quote=scorer_price,

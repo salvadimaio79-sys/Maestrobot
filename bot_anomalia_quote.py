@@ -40,12 +40,16 @@ WAIT_AFTER_GOAL_SEC = int(os.getenv("WAIT_AFTER_GOAL_SEC", "10"))
 BASELINE_SAMPLES = int(os.getenv("BASELINE_SAMPLES", "2"))
 BASELINE_SAMPLE_INTERVAL = int(os.getenv("BASELINE_SAMPLE_INTERVAL", "4"))
 
-# 🔥 FINESTRA GOAL: solo dal 25° al 50° minuto
-GOAL_MINUTE_MIN = int(os.getenv("GOAL_MINUTE_MIN", "25"))  # Minimo: 25'
-GOAL_MINUTE_MAX = int(os.getenv("GOAL_MINUTE_MAX", "50"))  # Massimo: 50'
+# 🔥 DUE FINESTRE GOAL:
+# 25-60' → OVER 2.5 FINALE (€50)
+# 60-80' → OVER 1.5 FINALE (€50)
+GOAL_WINDOW_1_MIN = int(os.getenv("GOAL_WINDOW_1_MIN", "25"))
+GOAL_WINDOW_1_MAX = int(os.getenv("GOAL_WINDOW_1_MAX", "60"))
+GOAL_WINDOW_2_MIN = int(os.getenv("GOAL_WINDOW_2_MIN", "60"))
+GOAL_WINDOW_2_MAX = int(os.getenv("GOAL_WINDOW_2_MAX", "80"))
 
-# 🔥 Stake OVER 2.5 FINALE
-STAKE_FT = int(os.getenv("STAKE_FT", "50"))  # €50 per OVER 2.5 FT
+# 🔥 Stake
+STAKE = int(os.getenv("STAKE", "50"))  # €50 per entrambi
 
 # Rate limiting
 MAX_API_RETRIES = 2
@@ -275,21 +279,35 @@ def parse_price(x):
 
 def check_signal_result(signal, current_score, ht_score, current_minute):
     """
-    Verifica se un segnale OVER 2.5 FINALE è vincente o perdente
+    Verifica se un segnale è vincente o perdente
     Returns: 'won', 'lost', or 'pending'
     """
     if signal["status"] != "pending":
         return signal["status"]
     
-    # Solo OVER 2.5 FINALE
+    bet_type = signal.get("bet_type", "")
+    
+    # Partita non finita
     if current_minute < 90:
-        return "pending"  # Partita non finita
+        return "pending"
     
     final_total = current_score[0] + current_score[1]
-    if final_total >= 3:
-        return "won"
-    else:
-        return "lost"
+    
+    # OVER 2.5 FINALE
+    if "2.5" in bet_type:
+        if final_total >= 3:
+            return "won"
+        else:
+            return "lost"
+    
+    # OVER 1.5 FINALE
+    elif "1.5" in bet_type:
+        if final_total >= 2:
+            return "won"
+        else:
+            return "lost"
+    
+    return "pending"
 
 def send_daily_report():
     """Invia report giornaliero pulito"""
@@ -574,10 +592,15 @@ def main_loop():
                             
                             # CONFERMA: visto 2 volte consecutive
                             if st.pending_goal_count >= 2:
-                                # 🔥 Verifica finestra minuti (25-50)
-                                if not (GOAL_MINUTE_MIN <= current_minute <= GOAL_MINUTE_MAX):
-                                    logger.info("⏭️ Goal %d' fuori finestra [%d-%d]: %s vs %s - SKIP",
-                                               current_minute, GOAL_MINUTE_MIN, GOAL_MINUTE_MAX, 
+                                # 🔥 Verifica finestre minuti
+                                in_window_1 = GOAL_WINDOW_1_MIN <= current_minute <= GOAL_WINDOW_1_MAX
+                                in_window_2 = GOAL_WINDOW_2_MIN <= current_minute <= GOAL_WINDOW_2_MAX
+                                
+                                if not (in_window_1 or in_window_2):
+                                    logger.info("⏭️ Goal %d' fuori finestre [%d-%d] e [%d-%d]: %s vs %s - SKIP",
+                                               current_minute, 
+                                               GOAL_WINDOW_1_MIN, GOAL_WINDOW_1_MAX,
+                                               GOAL_WINDOW_2_MIN, GOAL_WINDOW_2_MAX,
                                                home, away)
                                     st.notified = True  # Blocca questo match
                                     st.pending_goal_score = None
@@ -672,7 +695,7 @@ def main_loop():
                     logger.info("📈 %d' | %s vs %s: %.2f (base %.2f, Δ+%.3f)", 
                                current_minute, home, away, scorer_price, st.baseline, delta)
 
-                # STEP 7: Alert - SOLO OVER 2.5 FINALE
+                # STEP 7: Alert - DUE STRATEGIE
                 # 🔥 Controlla che quota finale non superi 2.00
                 if scorer_price > MAX_FINAL_QUOTE:
                     logger.warning("⚠️ Quota finale %.2f > %.2f: %s vs %s - SCARTATO", 
@@ -680,11 +703,25 @@ def main_loop():
                     st.notified = True
                     continue
                 
-                # 🔥 Controlla che quota finale sia almeno 1.50 per OVER 2.5
-                if scorer_price < MIN_OVER25_QUOTE:
-                    logger.warning("⚠️ Quota %.2f < %.2f (troppo bassa per OVER 2.5): %s vs %s - SCARTATO", 
-                                  scorer_price, MIN_OVER25_QUOTE, home, away)
-                    st.notified = True
+                # 🔥 Determina quale strategia in base al minuto del goal
+                if GOAL_WINDOW_1_MIN <= st.goal_minute <= GOAL_WINDOW_1_MAX:
+                    # Finestra 1: 25-60' → OVER 2.5 FINALE
+                    bet_type = "OVER 2.5 FINALE"
+                    
+                    # Controlla quota minima 1.50 per OVER 2.5
+                    if scorer_price < MIN_OVER25_QUOTE:
+                        logger.warning("⚠️ Quota %.2f < %.2f (troppo bassa per OVER 2.5): %s vs %s - SCARTATO", 
+                                      scorer_price, MIN_OVER25_QUOTE, home, away)
+                        st.notified = True
+                        continue
+                
+                elif GOAL_WINDOW_2_MIN <= st.goal_minute <= GOAL_WINDOW_2_MAX:
+                    # Finestra 2: 60-80' → OVER 1.5 FINALE
+                    bet_type = "OVER 1.5 FINALE"
+                    # Nessun controllo quota minima per OVER 1.5
+                
+                else:
+                    # Non dovrebbe mai succedere (già controllato prima)
                     continue
                 
                 if delta >= MIN_RISE:
@@ -701,13 +738,13 @@ def main_loop():
                         f"💸 Quota <b>{team_label}</b> ({team_name}):\n"
                         f"<b>{st.baseline:.2f}</b> → <b>{scorer_price:.2f}</b>\n"
                         f"📈 <b>+{delta:.2f}</b> (+{pct:.1f}%)\n\n"
-                        f"🎯 <b>GIOCA: OVER 2.5 FINALE</b> 🎯\n"
-                        f"💰 <b>Stake: €{STAKE_FT}</b>"
+                        f"🎯 <b>GIOCA: {bet_type}</b> 🎯\n"
+                        f"💰 <b>Stake: €{STAKE}</b>"
                     )
                     
                     if send_telegram_message(msg):
-                        logger.info("✅ ALERT %d': %s vs %s | %.2f→%.2f (+%.2f) | OVER 2.5 FT | €%d", 
-                                   current_minute, home, away, st.baseline, scorer_price, delta, STAKE_FT)
+                        logger.info("✅ ALERT %d': %s vs %s | %.2f→%.2f (+%.2f) | %s | €%d", 
+                                   current_minute, home, away, st.baseline, scorer_price, delta, bet_type, STAKE)
                         
                         # Traccia segnale nelle statistiche
                         if ENABLE_DAILY_STATS:
@@ -716,7 +753,7 @@ def main_loop():
                                 home=home,
                                 away=away,
                                 league=league,
-                                bet_type="OVER 2.5 FINALE",  # 🔥 FIX: stringa fissa
+                                bet_type=bet_type,
                                 goal_minute=st.goal_minute,
                                 baseline=st.baseline,
                                 final_quote=scorer_price,
@@ -758,32 +795,31 @@ def main():
         raise SystemExit("❌ Variabili mancanti")
     
     logger.info("="*60)
-    logger.info("🚀 BOT OVER 2.5 FINALE v5.0")
+    logger.info("🚀 BOT DUAL STRATEGY v6.0")
     logger.info("="*60)
     logger.info("⚙️  Config:")
-    logger.info("   • Goal window: %d' - %d'", GOAL_MINUTE_MIN, GOAL_MINUTE_MAX)
-    logger.info("   • Quote range: %.2f - %.2f", BASELINE_MIN, BASELINE_MAX)
-    logger.info("   • Min rise: +%.2f | Max quote: %.2f", MIN_RISE, MAX_FINAL_QUOTE)
-    logger.info("   • Stake: €%d", STAKE_FT)
-    logger.info("   • Red card filter: ON")
-    logger.info("   • Goal confirmation: 2-loop")
+    logger.info("   • Window 1: %d'-%d' → OVER 2.5", GOAL_WINDOW_1_MIN, GOAL_WINDOW_1_MAX)
+    logger.info("   • Window 2: %d'-%d' → OVER 1.5", GOAL_WINDOW_2_MIN, GOAL_WINDOW_2_MAX)
+    logger.info("   • Quote: %.2f-%.2f | Over 2.5 min: %.2f", BASELINE_MIN, BASELINE_MAX, MIN_OVER25_QUOTE)
+    logger.info("   • Rise: +%.2f | Max: %.2f", MIN_RISE, MAX_FINAL_QUOTE)
+    logger.info("   • Stake: €%d", STAKE)
+    logger.info("   • Protections: Red card, 2-loop confirm")
     logger.info("   • Report: %02d:00", DAILY_REPORT_HOUR)
     logger.info("="*60)
     
     send_telegram_message(
-        f"🤖 <b>Bot OVER 2.5 FINALE</b> v5.0 ⚡\n\n"
-        f"⚽ <b>STRATEGIA:</b>\n"
-        f"• Goal 0-0 → 1-0/0-1\n"
-        f"• Minuti: <b>{GOAL_MINUTE_MIN}' - {GOAL_MINUTE_MAX}'</b>\n"
-        f"• Quote: <b>{BASELINE_MIN:.2f} - {BASELINE_MAX:.2f}</b>\n"
-        f"• Rise min: <b>+{MIN_RISE:.2f}</b>\n"
-        f"• Max quota: <b>{MAX_FINAL_QUOTE:.2f}</b>\n\n"
-        f"🎯 <b>SCOMMESSA: OVER 2.5 FINALE</b>\n"
-        f"💰 Stake: <b>€{STAKE_FT}</b>\n\n"
-        f"🛡️ Protezioni:\n"
+        f"🤖 <b>Bot DUAL STRATEGY</b> v6.0 ⚡\n\n"
+        f"⚽ <b>DUE FINESTRE:</b>\n"
+        f"🎯 {GOAL_WINDOW_1_MIN}'-{GOAL_WINDOW_1_MAX}' → <b>OVER 2.5</b> (€{STAKE})\n"
+        f"🎯 {GOAL_WINDOW_2_MIN}'-{GOAL_WINDOW_2_MAX}' → <b>OVER 1.5</b> (€{STAKE})\n\n"
+        f"📊 <b>Parametri:</b>\n"
+        f"• Quote: {BASELINE_MIN:.2f} - {BASELINE_MAX:.2f}\n"
+        f"• Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n"
+        f"• Over 2.5 min: {MIN_OVER25_QUOTE:.2f}\n\n"
+        f"🛡️ <b>Protezioni:</b>\n"
         f"• Conferma goal (2-loop)\n"
         f"• Auto-scarta con rosso 🟥\n\n"
-        f"📊 Report giornaliero: <b>00:00</b>\n\n"
+        f"📊 Report: 00:00\n\n"
         f"🔍 Monitoraggio attivo!"
     )
     

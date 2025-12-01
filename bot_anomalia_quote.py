@@ -330,8 +330,8 @@ def send_daily_report():
     win_rate = (daily_stats.total_won / daily_stats.total_sent * 100) if daily_stats.total_sent > 0 else 0
     
     # Calcola profitto/perdita stimato
-    profit_won = daily_stats.total_won * STAKE_FT * 0.4  # ~40% rendimento medio
-    loss_total = daily_stats.total_lost * STAKE_FT
+    profit_won = daily_stats.total_won * STAKE * 0.4  # ~40% rendimento medio
+    loss_total = daily_stats.total_lost * STAKE
     net_profit = profit_won - loss_total
     
     msg = (
@@ -592,21 +592,6 @@ def main_loop():
                             
                             # CONFERMA: visto 2 volte consecutive
                             if st.pending_goal_count >= 2:
-                                # 🔥 Verifica finestre minuti
-                                in_window_1 = GOAL_WINDOW_1_MIN <= current_minute <= GOAL_WINDOW_1_MAX
-                                in_window_2 = GOAL_WINDOW_2_MIN <= current_minute <= GOAL_WINDOW_2_MAX
-                                
-                                if not (in_window_1 or in_window_2):
-                                    logger.info("⏭️ Goal %d' fuori finestre [%d-%d] e [%d-%d]: %s vs %s - SKIP",
-                                               current_minute, 
-                                               GOAL_WINDOW_1_MIN, GOAL_WINDOW_1_MAX,
-                                               GOAL_WINDOW_2_MIN, GOAL_WINDOW_2_MAX,
-                                               home, away)
-                                    st.notified = True  # Blocca questo match
-                                    st.pending_goal_score = None
-                                    st.pending_goal_count = 0
-                                    continue
-                                
                                 st.goal_time = now
                                 st.goal_minute = current_minute
                                 st.scoring_team = "home" if cur_score == (1, 0) else "away"
@@ -696,15 +681,17 @@ def main_loop():
                                current_minute, home, away, scorer_price, st.baseline, delta)
 
                 # STEP 7: Alert - DUE STRATEGIE
-                # 🔥 Controlla che quota finale non superi 2.00
+                # 🔥 La finestra si basa sul MINUTO ATTUALE (cambio quote), non sul minuto del goal
+                
+                # Controlla che quota finale non superi 2.00
                 if scorer_price > MAX_FINAL_QUOTE:
                     logger.warning("⚠️ Quota finale %.2f > %.2f: %s vs %s - SCARTATO", 
                                   scorer_price, MAX_FINAL_QUOTE, home, away)
                     st.notified = True
                     continue
                 
-                # 🔥 Determina quale strategia in base al minuto del goal
-                if GOAL_WINDOW_1_MIN <= st.goal_minute <= GOAL_WINDOW_1_MAX:
+                # 🔥 Determina strategia in base al MINUTO ATTUALE (quando quote cambia)
+                if GOAL_WINDOW_1_MIN <= current_minute <= GOAL_WINDOW_1_MAX:
                     # Finestra 1: 25-60' → OVER 2.5 FINALE
                     bet_type = "OVER 2.5 FINALE"
                     
@@ -715,13 +702,19 @@ def main_loop():
                         st.notified = True
                         continue
                 
-                elif GOAL_WINDOW_2_MIN <= st.goal_minute <= GOAL_WINDOW_2_MAX:
+                elif GOAL_WINDOW_2_MIN <= current_minute <= GOAL_WINDOW_2_MAX:
                     # Finestra 2: 60-80' → OVER 1.5 FINALE
                     bet_type = "OVER 1.5 FINALE"
                     # Nessun controllo quota minima per OVER 1.5
                 
                 else:
-                    # Non dovrebbe mai succedere (già controllato prima)
+                    # Fuori da entrambe le finestre
+                    logger.info("⏭️ Cambio quote al %d' fuori finestre [%d-%d] e [%d-%d]: %s vs %s - SKIP",
+                               current_minute,
+                               GOAL_WINDOW_1_MIN, GOAL_WINDOW_1_MAX,
+                               GOAL_WINDOW_2_MIN, GOAL_WINDOW_2_MAX,
+                               home, away)
+                    st.notified = True
                     continue
                 
                 if delta >= MIN_RISE:
@@ -743,8 +736,8 @@ def main_loop():
                     )
                     
                     if send_telegram_message(msg):
-                        logger.info("✅ ALERT %d': %s vs %s | %.2f→%.2f (+%.2f) | %s | €%d", 
-                                   current_minute, home, away, st.baseline, scorer_price, delta, bet_type, STAKE)
+                        logger.info("✅ ALERT %d': %s vs %s | Goal %d' | %.2f→%.2f (+%.2f) | %s | €%d", 
+                                   current_minute, home, away, st.goal_minute, st.baseline, scorer_price, delta, bet_type, STAKE)
                         
                         # Traccia segnale nelle statistiche
                         if ENABLE_DAILY_STATS:

@@ -29,10 +29,9 @@ RAPIDAPI_LIVE_PARAMS = {"i": "en_US", "f": "json", "e": "no"}
 # Business rules
 MIN_RISE        = float(os.getenv("MIN_RISE", "0.06"))
 MAX_RISE        = float(os.getenv("MAX_RISE", "0.70"))
-BASELINE_MIN    = float(os.getenv("BASELINE_MIN", "1.30"))  # 🔥 Baseline 1.30
+BASELINE_MIN    = float(os.getenv("BASELINE_MIN", "1.30"))
 BASELINE_MAX    = float(os.getenv("BASELINE_MAX", "1.75"))
-MAX_FINAL_QUOTE = float(os.getenv("MAX_FINAL_QUOTE", "2.00"))  # 🔥 Max quota aumentata 2.00
-MIN_OVER25_QUOTE = float(os.getenv("MIN_OVER25_QUOTE", "1.50"))  # 🔥 Over 2.5 min 1.50
+MAX_FINAL_QUOTE = float(os.getenv("MAX_FINAL_QUOTE", "2.00"))
 CHECK_INTERVAL  = int(os.getenv("CHECK_INTERVAL_SECONDS", "4"))
 WAIT_AFTER_GOAL_SEC = int(os.getenv("WAIT_AFTER_GOAL_SEC", "10"))
 
@@ -129,19 +128,40 @@ daily_stats = DailyStats()
 
 # FILTRI LEGHE - Solo eSports
 LEAGUE_EXCLUDE_KEYWORDS = [
+    # eSports/Virtual (NON calcio reale)
     "esoccer", "e-soccer", "cyber", "e-football", 
     "esports", "fifa", "pes", "efootball",
     "virtual", "simulated", "gtworld", "baller",
     "6 mins", "8 mins", "10 mins", "12 mins", 
     "15 mins", "20 mins", "30 mins", "h2h gg",
+    # 🚺 DONNE - Qualsiasi match femminile
+    "women", "woman", "w)", "(w", "feminine", "femminile", "donne",
+    # 🇮🇩 INDONESIA
+    "indonesia", "indonesian",
+]
+
+# 🇪🇸 SPAGNA: Accetta SOLO La Liga (esclude tutto il resto)
+SPAIN_ALLOWED_LEAGUES = [
+    "la liga", "laliga", "primera division", "primera división"
 ]
 
 def is_excluded_league(league_name: str) -> bool:
-    """Verifica se la lega è da escludere (solo eSports/Virtual)"""
+    """Verifica se la lega è da escludere"""
     league_lower = league_name.lower()
+    
+    # Check eSports/Virtual/Women/Indonesia keywords
     for keyword in LEAGUE_EXCLUDE_KEYWORDS:
         if keyword.lower() in league_lower:
             return True
+    
+    # 🇪🇸 SPAGNA: Accetta SOLO La Liga
+    if "spain" in league_lower or "spagna" in league_lower or "spanish" in league_lower or "españa" in league_lower:
+        # Se contiene "spain/spagna", accetta SOLO se è La Liga
+        for allowed in SPAIN_ALLOWED_LEAGUES:
+            if allowed.lower() in league_lower:
+                return False  # La Liga = OK, non escludere
+        return True  # Altre leghe spagnole = ESCLUDI
+    
     return False
 
 HEADERS = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": RAPIDAPI_HOST}
@@ -567,12 +587,25 @@ def main_loop():
 
                 st = match_state[eid]
                 
-                # 🔥 STEP 0: Controlla cartellino rosso
-                if has_red_card and not st.red_card_detected:
-                    st.red_card_detected = True
-                    logger.info("🟥 CARTELLINO ROSSO: %s vs %s - Match SCARTATO", home, away)
-                    st.notified = True  # Blocca alert
-                    continue
+                # 🔥 STEP 0: Controlla cartellino rosso INTELLIGENTE
+                if has_red_card:
+                    # Se goal non ancora rilevato, scarta tutto
+                    if st.goal_time is None:
+                        if not st.red_card_detected:
+                            st.red_card_detected = True
+                            logger.info("🟥 CARTELLINO ROSSO pre-goal: %s vs %s - Match SCARTATO", home, away)
+                            st.notified = True
+                        continue
+                    
+                    # Se goal già rilevato, verifica CHI ha preso il rosso
+                    # Se rosso alla squadra che NON ha segnato = OK (attaccheranno ancora)
+                    # Se rosso alla squadra che HA segnato = SCARTA (difenderanno)
+                    if not st.red_card_detected:
+                        st.red_card_detected = True
+                        # Per semplicità: scarta sempre (non sappiamo quale squadra ha il rosso dall'API)
+                        logger.info("🟥 CARTELLINO ROSSO: %s vs %s - Match SCARTATO", home, away)
+                        st.notified = True
+                        continue
                 
                 if st.red_card_detected:
                     continue  # Skip match con rosso
@@ -694,18 +727,10 @@ def main_loop():
                 if GOAL_WINDOW_1_MIN <= current_minute <= GOAL_WINDOW_1_MAX:
                     # Finestra 1: 25-60' → OVER 2.5 FINALE
                     bet_type = "OVER 2.5 FINALE"
-                    
-                    # Controlla quota minima 1.50 per OVER 2.5
-                    if scorer_price < MIN_OVER25_QUOTE:
-                        logger.warning("⚠️ Quota %.2f < %.2f (troppo bassa per OVER 2.5): %s vs %s - SCARTATO", 
-                                      scorer_price, MIN_OVER25_QUOTE, home, away)
-                        st.notified = True
-                        continue
                 
                 elif GOAL_WINDOW_2_MIN <= current_minute <= GOAL_WINDOW_2_MAX:
                     # Finestra 2: 60-80' → OVER 1.5 FINALE
                     bet_type = "OVER 1.5 FINALE"
-                    # Nessun controllo quota minima per OVER 1.5
                 
                 else:
                     # Fuori da entrambe le finestre
@@ -788,30 +813,31 @@ def main():
         raise SystemExit("❌ Variabili mancanti")
     
     logger.info("="*60)
-    logger.info("🚀 BOT DUAL STRATEGY v6.0")
+    logger.info("🚀 BOT OPTIMIZED v7.1")
     logger.info("="*60)
     logger.info("⚙️  Config:")
     logger.info("   • Window 1: %d'-%d' → OVER 2.5", GOAL_WINDOW_1_MIN, GOAL_WINDOW_1_MAX)
     logger.info("   • Window 2: %d'-%d' → OVER 1.5", GOAL_WINDOW_2_MIN, GOAL_WINDOW_2_MAX)
-    logger.info("   • Quote: %.2f-%.2f | Over 2.5 min: %.2f", BASELINE_MIN, BASELINE_MAX, MIN_OVER25_QUOTE)
+    logger.info("   • Quote: %.2f-%.2f", BASELINE_MIN, BASELINE_MAX)
     logger.info("   • Rise: +%.2f | Max: %.2f", MIN_RISE, MAX_FINAL_QUOTE)
     logger.info("   • Stake: €%d", STAKE)
-    logger.info("   • Protections: Red card, 2-loop confirm")
+    logger.info("   • Filters: Spain (only La Liga), Women, Indonesia")
     logger.info("   • Report: %02d:00", DAILY_REPORT_HOUR)
     logger.info("="*60)
     
     send_telegram_message(
-        f"🤖 <b>Bot DUAL STRATEGY</b> v6.0 ⚡\n\n"
+        f"🤖 <b>Bot OPTIMIZED</b> v7.1 ⚡\n\n"
         f"⚽ <b>DUE FINESTRE:</b>\n"
         f"🎯 {GOAL_WINDOW_1_MIN}'-{GOAL_WINDOW_1_MAX}' → <b>OVER 2.5</b> (€{STAKE})\n"
         f"🎯 {GOAL_WINDOW_2_MIN}'-{GOAL_WINDOW_2_MAX}' → <b>OVER 1.5</b> (€{STAKE})\n\n"
         f"📊 <b>Parametri:</b>\n"
-        f"• Quote: {BASELINE_MIN:.2f} - {BASELINE_MAX:.2f}\n"
-        f"• Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n"
-        f"• Over 2.5 min: {MIN_OVER25_QUOTE:.2f}\n\n"
-        f"🛡️ <b>Protezioni:</b>\n"
-        f"• Conferma goal (2-loop)\n"
-        f"• Auto-scarta con rosso 🟥\n\n"
+        f"• Quote: {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
+        f"• Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n\n"
+        f"🛡️ <b>Filtri:</b>\n"
+        f"• 🇪🇸 Spagna: SOLO La Liga\n"
+        f"• 🚺 Donne: ESCLUSE\n"
+        f"• 🇮🇩 Indonesia: ESCLUSA\n"
+        f"• 🟥 Cartellino rosso: SCARTA\n\n"
         f"📊 Report: 00:00\n\n"
         f"🔍 Monitoraggio attivo!"
     )

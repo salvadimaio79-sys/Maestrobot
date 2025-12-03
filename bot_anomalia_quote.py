@@ -1,12 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Bot Anomalia Quote - v8.0 FINAL
-Strategia HT Recovery:
-- Goal entro 25' (al momento cambio quote) → OVER 1.5 HT
-- Se HT perso → OVER 2.5 FT (stesso match, nuovo segnale)
-"""
-
 import os
 import sys
 import time
@@ -25,6 +16,9 @@ RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST", "soccer-football-info.p.rapidapi.com"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# Debug: log env vars status
+print(f"🔑 ENV: TOKEN={'✅' if TELEGRAM_TOKEN else '❌'} | CHAT_ID={'✅' if TELEGRAM_CHAT_ID else '❌'}")
+
 # Business rules
 MIN_RISE        = float(os.getenv("MIN_RISE", "0.06"))
 MAX_RISE        = float(os.getenv("MAX_RISE", "0.70"))
@@ -38,9 +32,7 @@ WAIT_AFTER_GOAL_SEC = int(os.getenv("WAIT_AFTER_GOAL_SEC", "10"))
 BASELINE_SAMPLES = int(os.getenv("BASELINE_SAMPLES", "2"))
 BASELINE_SAMPLE_INTERVAL = int(os.getenv("BASELINE_SAMPLE_INTERVAL", "4"))
 
-# 🔥 STRATEGIA HT RECOVERY:
-# Cambio quote entro 25' → OVER 1.5 HT
-# Se HT perso → OVER 2.5 FT
+# Strategia HT Recovery
 GOAL_MINUTE_MAX_HT = int(os.getenv("GOAL_MINUTE_MAX_HT", "25"))
 
 # Stake
@@ -68,33 +60,26 @@ logger = logging.getLogger(__name__)
 # FILTRI LEGHE
 # =========================
 LEAGUE_EXCLUDE_KEYWORDS = [
-    # eSports/Virtual
     "esoccer", "e-soccer", "cyber", "e-football", 
     "esports", "fifa", "pes", "efootball",
     "virtual", "simulated", "gtworld", "baller",
     "6 mins", "8 mins", "10 mins", "12 mins", 
     "15 mins", "20 mins", "30 mins", "h2h gg",
-    # Donne
     "women", "woman", "w)", "(w", "feminine", "femminile", "donne",
-    # Indonesia
     "indonesia", "indonesian",
 ]
 
-# Spagna: SOLO La Liga
 SPAIN_ALLOWED_LEAGUES = [
     "la liga", "laliga", "primera division", "primera división"
 ]
 
 def is_excluded_league(league_name: str) -> bool:
-    """Verifica se la lega è da escludere"""
     league_lower = league_name.lower()
     
-    # Check keywords
     for keyword in LEAGUE_EXCLUDE_KEYWORDS:
         if keyword.lower() in league_lower:
             return True
     
-    # Spagna: SOLO La Liga
     if "spain" in league_lower or "spagna" in league_lower or "spanish" in league_lower or "españa" in league_lower:
         for allowed in SPAIN_ALLOWED_LEAGUES:
             if allowed.lower() in league_lower:
@@ -132,11 +117,9 @@ class MatchState:
         self.pending_goal_count = 0
         self.pre_goal_quote = None
         self.red_card_detected = False
-        
-        # HT recovery tracking
         self.sent_ht_alert = False
-        self.ht_result = None  # 'won', 'lost', 'pending'
-        self.sent_ft_recovery = False  # Ha già mandato recovery FT?
+        self.ht_result = None
+        self.sent_ft_recovery = False
 
 match_state = {}
 _loop = 0
@@ -259,13 +242,11 @@ def parse_price(x):
         return None
 
 def check_signal_result(signal, current_score, ht_score, current_minute):
-    """Verifica risultato segnale"""
     if signal["status"] != "pending":
         return signal["status"]
     
     bet_type = signal.get("bet_type", "")
     
-    # OVER 1.5 HT
     if "HT" in bet_type or "PRIMO TEMPO" in bet_type:
         if current_minute >= 45:
             if ht_score is not None:
@@ -275,7 +256,6 @@ def check_signal_result(signal, current_score, ht_score, current_minute):
                 return "lost"
         return "pending"
     
-    # OVER 2.5 FT
     elif "FT" in bet_type or "FINALE" in bet_type:
         if current_minute < 90:
             return "pending"
@@ -286,7 +266,6 @@ def check_signal_result(signal, current_score, ht_score, current_minute):
     return "pending"
 
 def send_daily_report():
-    """Invia report giornaliero"""
     if not ENABLE_DAILY_STATS:
         return
     
@@ -294,7 +273,7 @@ def send_daily_report():
         msg = (
             f"📊 <b>REPORT GIORNALIERO</b> 📊\n"
             f"📅 {daily_stats.reset_date}\n\n"
-            f"📭 Nessun segnale inviato oggi\n\n"
+            f"📭 Nessun segnale oggi\n\n"
             f"🔄 Statistiche resettate"
         )
         send_telegram_message(msg)
@@ -302,7 +281,6 @@ def send_daily_report():
         daily_stats.last_report_sent = time.time()
         return
     
-    # Dividi per tipo
     ht_signals = [s for s in daily_stats.signals_sent if "HT" in s["bet_type"]]
     ft_signals = [s for s in daily_stats.signals_sent if "FT" in s["bet_type"]]
     
@@ -328,7 +306,6 @@ def send_daily_report():
         f"📈 Win Rate: <b>{total_wr:.1f}%</b>\n\n"
     )
     
-    # OVER 1.5 HT
     if ht_signals:
         msg += (
             f"⏰ <b>OVER 1.5 HT ({len(ht_signals)})</b>\n"
@@ -336,26 +313,20 @@ def send_daily_report():
             f"📈 WR: {ht_wr:.1f}%\n\n"
         )
         
-        won_ht = [s for s in ht_signals if s["status"] == "won"]
+        won_ht = [s for s in ht_signals if s["status"] == "won"][:5]
         if won_ht:
             msg += "✅ <b>Vincenti HT:</b>\n"
-            for i, s in enumerate(won_ht[:5], 1):
-                score = s.get("final_score", (0, 0))
+            for i, s in enumerate(won_ht, 1):
                 msg += f"{i}. {s['home']} vs {s['away']}\n"
-            if len(won_ht) > 5:
-                msg += f"   ... e altri {len(won_ht) - 5}\n"
             msg += "\n"
         
-        lost_ht = [s for s in ht_signals if s["status"] == "lost"]
+        lost_ht = [s for s in ht_signals if s["status"] == "lost"][:5]
         if lost_ht:
             msg += "❌ <b>Perdenti HT:</b>\n"
-            for i, s in enumerate(lost_ht[:5], 1):
+            for i, s in enumerate(lost_ht, 1):
                 msg += f"{i}. {s['home']} vs {s['away']}\n"
-            if len(lost_ht) > 5:
-                msg += f"   ... e altri {len(lost_ht) - 5}\n"
             msg += "\n"
     
-    # OVER 2.5 FT
     if ft_signals:
         msg += (
             f"🎯 <b>OVER 2.5 FT ({len(ft_signals)})</b>\n"
@@ -363,35 +334,27 @@ def send_daily_report():
             f"📈 WR: {ft_wr:.1f}%\n\n"
         )
         
-        won_ft = [s for s in ft_signals if s["status"] == "won"]
+        won_ft = [s for s in ft_signals if s["status"] == "won"][:5]
         if won_ft:
             msg += "✅ <b>Vincenti FT:</b>\n"
-            for i, s in enumerate(won_ft[:5], 1):
-                score = s.get("final_score", (0, 0))
+            for i, s in enumerate(won_ft, 1):
                 msg += f"{i}. {s['home']} vs {s['away']}\n"
-            if len(won_ft) > 5:
-                msg += f"   ... e altri {len(won_ft) - 5}\n"
             msg += "\n"
         
-        lost_ft = [s for s in ft_signals if s["status"] == "lost"]
+        lost_ft = [s for s in ft_signals if s["status"] == "lost"][:5]
         if lost_ft:
             msg += "❌ <b>Perdenti FT:</b>\n"
-            for i, s in enumerate(lost_ft[:5], 1):
+            for i, s in enumerate(lost_ft, 1):
                 msg += f"{i}. {s['home']} vs {s['away']}\n"
-            if len(lost_ft) > 5:
-                msg += f"   ... e altri {len(lost_ft) - 5}\n"
             msg += "\n"
     
     msg += "🔄 Statistiche resettate"
     
     send_telegram_message(msg)
-    logger.info("📊 Report: %d segnali | HT: %d/%d/%d | FT: %d/%d/%d", 
-               daily_stats.total_sent, ht_won, ht_lost, ht_pending,
-               ft_won, ft_lost, ft_pending)
+    logger.info("📊 Report inviato")
     daily_stats.last_report_sent = time.time()
 
 def get_live_events():
-    """Recupera eventi live dall'API"""
     url = f"https://{RAPIDAPI_HOST}/api/liveevents"
     r = http_get(url, headers=HEADERS, timeout=12)
     if not r:
@@ -427,11 +390,9 @@ def get_live_events():
         if not all([league, home, away]):
             continue
         
-        # Filtri
         if is_excluded_league(league):
             continue
         
-        # In play?
         status_str = str(match.get("status", "")).lower()
         if "in play" not in status_str:
             continue
@@ -465,7 +426,6 @@ def get_live_events():
         
         cur_score = (h_score, a_score)
         
-        # HT score
         ht_a = match.get("scores", {}).get("ht", {})
         ht_score = None
         if isinstance(ht_a, dict):
@@ -477,7 +437,6 @@ def get_live_events():
                 except:
                     pass
         
-        # Red card
         rc_a = score_a.get("rc", 0)
         rc_b = score_a.get("rc", 0)
         has_red_card = False
@@ -487,7 +446,6 @@ def get_live_events():
         except:
             pass
         
-        # Odds
         odds_data = match.get("odds") or {}
         live_odds = odds_data.get("live") or {}
         odds_1x2 = live_odds.get("1X2") or {}
@@ -525,7 +483,6 @@ def main_loop():
     now = time.time()
     _loop += 1
     
-    # Daily report
     if ENABLE_DAILY_STATS:
         current_hour = datetime.now().hour
         if current_hour == DAILY_REPORT_HOUR:
@@ -533,7 +490,6 @@ def main_loop():
                 send_daily_report()
                 daily_stats.reset()
     
-    # Cooldown check
     if _last_daily_429_ts > 0:
         elapsed = (now - _last_daily_429_ts) / 60
         if elapsed < COOLDOWN_ON_DAILY_429_MIN:
@@ -541,7 +497,6 @@ def main_loop():
     
     events = get_live_events()
     
-    # Update stats tracking
     if ENABLE_DAILY_STATS:
         for signal in daily_stats.signals_sent:
             if signal["status"] != "pending":
@@ -585,22 +540,19 @@ def main_loop():
         away_price = evt["away_price"]
         has_red_card = evt["has_red_card"]
         
-        # Track 0-0
         if cur_score == (0, 0):
             zero_zero_count += 1
         
-        # Init state
         if eid not in match_state:
             match_state[eid] = MatchState()
             match_state[eid].first_seen_score = cur_score
         
         st = match_state[eid]
         
-        # Red card check
         if has_red_card:
             if not st.red_card_detected:
                 st.red_card_detected = True
-                logger.info("🟥 ROSSO: %s vs %s - SCARTATO", home, away)
+                logger.info("🟥 ROSSO: %s vs %s", home, away)
                 st.notified = True
             continue
         
@@ -613,11 +565,9 @@ def main_loop():
                 ht_total = ht_score[0] + ht_score[1]
                 
                 if ht_total < 2:
-                    # HT LOST → Send OVER 2.5 FT
                     st.ht_result = "lost"
                     st.sent_ft_recovery = True
                     
-                    # Check quote disponibili
                     if st.scoring_team and home_price and away_price:
                         scorer_price = home_price if st.scoring_team == "home" else away_price
                         
@@ -637,8 +587,8 @@ def main_loop():
                             )
                             
                             if send_telegram_message(msg):
-                                logger.info("✅ RECOVERY FT %d': %s vs %s | %.2f | OVER 2.5 FT", 
-                                           current_minute, home, away, scorer_price)
+                                logger.info("✅ RECOVERY %d': %s vs %s | OVER 2.5 FT", 
+                                           current_minute, home, away)
                                 
                                 if ENABLE_DAILY_STATS:
                                     daily_stats.add_signal(
@@ -656,64 +606,52 @@ def main_loop():
                 else:
                     st.ht_result = "won"
         
-        # Skip if already notified
         if st.notified:
             continue
         
         monitored_count += 1
         
-        # STEP 1: Detect goal
+        # Detect goal
         if st.goal_time is None:
             if cur_score in [(1, 0), (0, 1)] and st.first_seen_score == (0, 0):
-                # Conferma goal (2-loop)
                 if st.pending_goal_score == cur_score:
                     st.pending_goal_count += 1
-                    logger.info("⏳ Goal rilevato (%d/2): %s vs %s (%d-%d)",
-                               st.pending_goal_count, home, away, cur_score[0], cur_score[1])
                     
                     if st.pending_goal_count >= 2:
                         st.goal_time = now
                         st.goal_minute = current_minute
                         st.scoring_team = "home" if cur_score == (1, 0) else "away"
-                        logger.info("⚽ GOAL CONFERMATO %d': %s vs %s (%d-%d) | %s", 
-                                   current_minute, home, away, cur_score[0], cur_score[1], league)
+                        logger.info("⚽ GOAL %d': %s vs %s (%d-%d)", 
+                                   current_minute, home, away, cur_score[0], cur_score[1])
                 else:
-                    if st.pending_goal_score is not None:
-                        logger.info("❌ Falso positivo annullato: %s vs %s", home, away)
                     st.pending_goal_score = cur_score
                     st.pending_goal_count = 1
             
             continue
         
-        # STEP 2: Wait after goal
         if (now - st.goal_time) < WAIT_AFTER_GOAL_SEC:
             continue
         
-        # STEP 3: No odds
         if home_price is None and away_price is None:
             st.consecutive_errors += 1
             if st.consecutive_errors > 8:
-                logger.warning("⚠️ Skip %s vs %s (no odds)", home, away)
                 st.notified = True
             continue
         
-        # STEP 4: Get scorer price
         scorer_price = home_price if st.scoring_team == "home" else away_price
         
         if scorer_price is None:
             st.consecutive_errors += 1
             if st.consecutive_errors > 8:
-                logger.warning("⚠️ Skip %s vs %s (no odds)", home, away)
                 st.notified = True
             continue
         
         st.consecutive_errors = 0
         
-        # STEP 5: Baseline
+        # Baseline
         if st.baseline is None:
             if scorer_price < BASELINE_MIN or scorer_price > BASELINE_MAX:
-                logger.info("❌ %.2f fuori range [%.2f-%.2f]: %s vs %s", 
-                           scorer_price, BASELINE_MIN, BASELINE_MAX, home, away)
+                logger.info("❌ %.2f fuori range: %s vs %s", scorer_price, home, away)
                 st.notified = True
                 continue
             
@@ -723,33 +661,20 @@ def main_loop():
                 st.baseline = min(st.baseline_samples)
                 logger.info("✅ Baseline %.2f (%d'): %s vs %s", 
                            st.baseline, current_minute, home, away)
-            else:
-                logger.info("📊 Sample %d/%d: %.2f (%d') | %s vs %s", 
-                           len(st.baseline_samples), BASELINE_SAMPLES, 
-                           scorer_price, current_minute, home, away)
             
             st.last_quote = scorer_price
             continue
         
-        # STEP 6: Monitor
+        # Monitor
         delta = scorer_price - st.baseline
         st.last_quote = scorer_price
         
-        if delta >= MIN_RISE * 0.7:
-            logger.info("📈 %d' | %s vs %s: %.2f (base %.2f, Δ+%.3f)", 
-                       current_minute, home, away, scorer_price, st.baseline, delta)
-        
-        # STEP 7: Alert OVER 1.5 HT (if within 25')
+        # Alert OVER 1.5 HT
         if scorer_price > MAX_FINAL_QUOTE:
-            logger.warning("⚠️ Quota %.2f > %.2f: %s vs %s - SCARTATO", 
-                          scorer_price, MAX_FINAL_QUOTE, home, away)
             st.notified = True
             continue
         
-        # 🔥 Check: cambio quote entro 25'?
         if current_minute > GOAL_MINUTE_MAX_HT:
-            logger.info("⏭️ Cambio quote %d' > %d': %s vs %s - SKIP",
-                       current_minute, GOAL_MINUTE_MAX_HT, home, away)
             st.notified = True
             continue
         
@@ -772,8 +697,8 @@ def main_loop():
             )
             
             if send_telegram_message(msg):
-                logger.info("✅ ALERT HT %d': %s vs %s | Goal %d' | %.2f→%.2f (+%.2f) | OVER 1.5 HT", 
-                           current_minute, home, away, st.goal_minute, st.baseline, scorer_price, delta)
+                logger.info("✅ ALERT HT %d': %s vs %s | %.2f→%.2f", 
+                           current_minute, home, away, st.baseline, scorer_price)
                 
                 st.sent_ht_alert = True
                 st.notified = True
@@ -792,7 +717,6 @@ def main_loop():
                         timestamp=now
                     )
     
-    # Stats log
     if _loop % 15 == 0:
         logger.info("📊 %d live | %d 0-0 | %d monitored | Stats: %d sent, %d won, %d lost", 
                    len(events), zero_zero_count, monitored_count,
@@ -800,35 +724,30 @@ def main_loop():
 
 def main():
     logger.info("="*60)
-    logger.info("🚀 BOT HT RECOVERY v8.0")
+    logger.info("🚀 BOT HT RECOVERY v8.3")
     logger.info("="*60)
     logger.info("⚙️  Config:")
-    logger.info("   • Goal → OVER 1.5 HT (cambio quote ≤%d')", GOAL_MINUTE_MAX_HT)
-    logger.info("   • HT perso → OVER 2.5 FT (recovery)")
+    logger.info("   • OVER 1.5 HT (quote ≤%d')", GOAL_MINUTE_MAX_HT)
+    logger.info("   • HT perso → OVER 2.5 FT")
     logger.info("   • Quote: %.2f-%.2f | Max: %.2f", BASELINE_MIN, BASELINE_MAX, MAX_FINAL_QUOTE)
     logger.info("   • Rise: +%.2f | Stake: €%d", MIN_RISE, STAKE)
-    logger.info("   • Filters: Spain (La Liga only), Women, Indonesia")
-    logger.info("   • Report: %02d:00", DAILY_REPORT_HOUR)
     logger.info("="*60)
     
     send_telegram_message(
-        f"🤖 <b>Bot HT RECOVERY</b> v8.0 ⚡\n\n"
+        f"🤖 <b>Bot HT RECOVERY</b> v8.3 ⚡\n\n"
         f"⚽ <b>STRATEGIA:</b>\n"
-        f"1️⃣ Cambio quote ≤{GOAL_MINUTE_MAX_HT}' → <b>OVER 1.5 HT</b>\n"
-        f"2️⃣ Se HT perso → <b>OVER 2.5 FT</b>\n\n"
+        f"1️⃣ Quote ≤{GOAL_MINUTE_MAX_HT}' → <b>OVER 1.5 HT</b>\n"
+        f"2️⃣ HT perso → <b>OVER 2.5 FT</b>\n\n"
         f"📊 Quote: {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
-        f"📈 Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n"
         f"💰 Stake: €{STAKE}\n\n"
-        f"🛡️ Filtri attivi\n"
-        f"📊 Report: 00:00\n\n"
-        f"🔍 Monitoraggio attivo!"
+        f"🔍 Attivo!"
     )
     
     while True:
         try:
             main_loop()
         except KeyboardInterrupt:
-            logger.info("⛔ Interrupted")
+            logger.info("⛔ Stop")
             break
         except Exception as e:
             logger.error("❌ Error: %s", e, exc_info=True)

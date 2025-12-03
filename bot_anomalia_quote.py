@@ -23,7 +23,7 @@ from collections import deque, defaultdict
 RAPIDAPI_KEY  = os.getenv("RAPIDAPI_KEY", "")
 RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST", "soccer-football-info.p.rapidapi.com")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Business rules
 MIN_RISE        = float(os.getenv("MIN_RISE", "0.06"))
@@ -182,7 +182,7 @@ daily_stats = DailyStats()
 # UTILITY FUNCTIONS
 # =========================
 def send_telegram_message(message: str) -> bool:
-    if not TELEGRAM_TOKEN or not CHAT_ID:
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning("⚠️ Telegram non configurato")
         return False
     
@@ -191,7 +191,7 @@ def send_telegram_message(message: str) -> bool:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             r = requests.post(
                 url, 
-                data={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}, 
+                data={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}, 
                 timeout=10
             )
             if r and r.ok:

@@ -369,32 +369,48 @@ def main_loop():
                     logger.info("🟥 ROSSO: %s vs %s", home, away)
                     continue
 
-                # HT Recovery check
+                # HT Recovery check - SEMPLIFICATO
                 if st.sent_ht_alert and not st.sent_ft_recovery:
-                    if current_minute >= 45 and ht_score != (0, 0):
-                        ht_total = ht_score[0] + ht_score[1]
+                    # Appena >= 45' minuto, controlla HT
+                    if current_minute >= 45:
+                        # Calcola goal HT
+                        ht_total = ht_score[0] + ht_score[1] if ht_score != (0, 0) else 0
                         
-                        if ht_total < 2:
+                        # Se HT score non ancora disponibile ma siamo a 45+, assume 1 goal
+                        # (sappiamo che era 0-1 o 1-0 quando abbiamo fatto alert)
+                        if ht_total == 0 and current_minute >= 45:
+                            ht_total = 1  # Era sicuramente 0-1 o 1-0
+                        
+                        # Se HT < 2 goal → RECOVERY OVER 2.5 FT
+                        if ht_total < 2 and ht_total > 0:
                             st.sent_ft_recovery = True
-                            scorer_price = odds["home"] if st.scoring_team == "home" else odds["away"]
                             
-                            if scorer_price and BASELINE_MIN <= scorer_price <= MAX_FINAL_QUOTE:
-                                team_name = home if st.scoring_team == "home" else away
-                                team_label = "1" if st.scoring_team == "home" else "2"
-                                
-                                msg = (
-                                    f"💰💎 <b>QUOTE JUMP</b> 💎💰\n\n"
-                                    f"🏆 {league}\n"
-                                    f"⚽ <b>{home}</b> vs <b>{away}</b>\n"
-                                    f"📊 <b>{cur_score[0]}-{cur_score[1]}</b> ({current_minute}')\n\n"
-                                    f"⚽ Goal al {st.goal_minute}'\n"
-                                    f"💸 Quota <b>{team_label}</b> ({team_name}): <b>{scorer_price:.2f}</b>\n\n"
-                                    f"🎯 <b>GIOCA: OVER 2.5 FT</b> 🎯\n"
-                                    f"💰 <b>Stake: €{STAKE}</b>"
-                                )
-                                
-                                if send_telegram_message(msg):
-                                    logger.info("✅ RECOVERY FT: %s vs %s", home, away)
+                            team_name = home if st.scoring_team == "home" else away
+                            team_label = "1" if st.scoring_team == "home" else "2"
+                            
+                            msg = (
+                                f"🔄💎 <b>HT RECOVERY</b> 💎🔄\n\n"
+                                f"❌ <b>OVER 1.5 HT PERSO</b>\n\n"
+                                f"🏆 {league}\n"
+                                f"⚽ <b>{home}</b> vs <b>{away}</b>\n"
+                                f"📊 HT: <b>{ht_score[0]}-{ht_score[1]}</b> (1 goal)\n"
+                                f"📊 Attuale: <b>{cur_score[0]}-{cur_score[1]}</b> ({current_minute}')\n\n"
+                                f"⚽ Goal 1T: {st.goal_minute}'\n"
+                                f"💸 Team segnalato: <b>{team_label}</b> ({team_name})\n\n"
+                                f"🎯 <b>GIOCA: OVER 2.5 FT</b> 🎯\n"
+                                f"💰 <b>Stake: €{STAKE}</b>\n\n"
+                                f"♻️ Strategia recovery!"
+                            )
+                            
+                            if send_telegram_message(msg):
+                                logger.info("✅ RECOVERY FT 45'+: %s vs %s | HT %d-%d → OVER 2.5", 
+                                           home, away, ht_score[0], ht_score[1])
+                        
+                        # Se HT >= 2 goal → alert vinto!
+                        elif ht_total >= 2:
+                            st.sent_ft_recovery = True  # Non mandare recovery
+                            logger.info("🎉 HT WON: %s vs %s | HT %d-%d", 
+                                       home, away, ht_score[0], ht_score[1])
 
                 # Goal detection
                 if st.goal_time is None:

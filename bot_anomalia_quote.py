@@ -500,16 +500,17 @@ def main_loop():
                     st.notified = True
                     continue
 
-                # FINESTRA TEMPORALE (≤25')
-                if current_minute > GOAL_MINUTE_MAX_HT:
-                    logger.info("⏭️ Minuto %d' > %d': SKIP", current_minute, GOAL_MINUTE_MAX_HT)
-                    st.notified = True
-                    continue
-
                 # ============================================
                 # ALERT OVER 1.5 HT
                 # ============================================
                 if delta >= MIN_RISE:
+                    # CONTROLLO CRUCIALE: Il cambio quote deve avvenire entro 25'!
+                    if current_minute > GOAL_MINUTE_MAX_HT:
+                        logger.info("⏭️ Varianza quote al %d' (oltre %d'): %s vs %s - SKIP", 
+                                   current_minute, GOAL_MINUTE_MAX_HT, home, away)
+                        st.notified = True
+                        continue
+                    
                     team_name = home if st.scoring_team == "home" else away
                     team_label = "1" if st.scoring_team == "home" else "2"
                     pct = (delta / st.baseline * 100)
@@ -559,7 +560,7 @@ def main():
     logger.info("="*60)
     logger.info("🚀 BOT HT RECOVERY FINALE")
     logger.info("="*60)
-    logger.info("   1️⃣ Goal ≤%d' + Quote ↑ → OVER 1.5 HT", GOAL_MINUTE_MAX_HT)
+    logger.info("   1️⃣ Goal + VARIANZA QUOTE entro %d' → OVER 1.5 HT", GOAL_MINUTE_MAX_HT)
     logger.info("   2️⃣ HT perso → OVER 2.5 FT")
     logger.info("   📊 Quote: %.2f-%.2f | Max: %.2f", BASELINE_MIN, BASELINE_MAX, MAX_FINAL_QUOTE)
     logger.info("   📈 Rise: +%.2f | Stake: €%d", MIN_RISE, STAKE)
@@ -567,11 +568,12 @@ def main():
     
     send_telegram_message(
         f"🤖 <b>Bot HT RECOVERY</b> FINALE ⚡\n\n"
-        f"1️⃣ Goal ≤{GOAL_MINUTE_MAX_HT}' + Quote ↑ → <b>OVER 1.5 HT</b>\n"
+        f"1️⃣ Goal + Quote ↑ <b>entro {GOAL_MINUTE_MAX_HT}'</b> → <b>OVER 1.5 HT</b>\n"
         f"2️⃣ HT perso → <b>OVER 2.5 FT</b>\n\n"
         f"📊 Quote: {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
         f"📈 Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n"
         f"💰 Stake: €{STAKE}\n\n"
+        f"⚠️ Varianza quote DEVE avvenire entro {GOAL_MINUTE_MAX_HT}'\n\n"
         f"🔍 Attivo!"
     )
     

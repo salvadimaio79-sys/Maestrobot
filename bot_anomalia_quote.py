@@ -374,11 +374,16 @@ def main_loop():
                 # ============================================
                 if st.sent_ht_alert and not st.sent_ft_recovery:
                     if current_minute >= 45:
+                        # Usa HT score dall'API se disponibile
                         ht_total = ht_score[0] + ht_score[1] if ht_score != (0, 0) else 0
                         
-                        # Se HT score non disponibile ma siamo a 45+, assume 1
+                        # Se HT score non disponibile (0-0) ma siamo a 45'+
+                        # USA LO SCORE LIVE CORRENTE come HT score
                         if ht_total == 0 and current_minute >= 45:
-                            ht_total = 1
+                            ht_total = cur_score[0] + cur_score[1]
+                            ht_score = cur_score  # Aggiorna per il messaggio
+                            logger.info("📊 HT Score non disponibile - uso live: %d-%d", 
+                                       cur_score[0], cur_score[1])
                         
                         # Se HT < 2 goal → RECOVERY
                         if ht_total < 2 and ht_total > 0:
@@ -401,13 +406,13 @@ def main_loop():
                             )
                             
                             if send_telegram_message(msg):
-                                logger.info("✅ RECOVERY 45'+: %s vs %s | HT %d-%d → OVER 2.5 FT", 
+                                logger.info("✅ RECOVERY 45'+: %s vs %s | HT %d-%d (<%2) → OVER 2.5 FT", 
                                            home, away, ht_score[0], ht_score[1])
                         
-                        # Se HT >= 2 → Vinto!
+                        # Se HT >= 2 → Vinto! NO RECOVERY
                         elif ht_total >= 2:
                             st.sent_ft_recovery = True
-                            logger.info("🎉 HT WON: %s vs %s | HT %d-%d", 
+                            logger.info("🎉 HT WON: %s vs %s | HT %d-%d (≥2 goal)", 
                                        home, away, ht_score[0], ht_score[1])
 
                 # ============================================

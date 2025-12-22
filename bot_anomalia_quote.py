@@ -38,7 +38,8 @@ BASELINE_SAMPLE_INTERVAL = int(os.getenv("BASELINE_SAMPLE_INTERVAL", "6"))
 
 # HT Recovery
 GOAL_MINUTE_MAX_HT = int(os.getenv("GOAL_MINUTE_MAX_HT", "25"))
-STAKE = int(os.getenv("STAKE", "50"))
+STAKE_HT = int(os.getenv("STAKE_HT", "20"))
+STAKE_FT = int(os.getenv("STAKE_FT", "40"))
 
 # Rate limiting
 API_CALL_MIN_GAP_MS = int(os.getenv("API_CALL_MIN_GAP_MS", "300"))
@@ -394,15 +395,15 @@ def main_loop():
                             
                             msg = (
                                 f"🔄💎 <b>RECOVERY</b> 💎🔄\n\n"
-                                f"❌ OVER 1.5 HT perso\n\n"
+                                f"❌ OVER 1.5 PRIMO TEMPO perso\n\n"
                                 f"🏆 {league}\n"
                                 f"⚽ <b>{home}</b> vs <b>{away}</b>\n"
-                                f"📊 HT: <b>{ht_score[0]}-{ht_score[1]}</b>\n"
+                                f"📊 Primo Tempo: <b>{ht_score[0]}-{ht_score[1]}</b>\n"
                                 f"📊 Live: <b>{cur_score[0]}-{cur_score[1]}</b> ({current_minute}')\n\n"
                                 f"⚽ Goal 1T: {st.goal_minute}'\n"
                                 f"💸 Team: <b>{team_label}</b> ({team_name})\n\n"
-                                f"🎯 <b><u>GIOCA: OVER 2.5 FT</u></b> 🎯\n"
-                                f"💰 <b>Stake: €{STAKE}</b>"
+                                f"<b><u>🎯 GIOCA: OVER 2.5 FINALE 🎯</u></b>\n"
+                                f"💰 <b>Stake: €{STAKE_FT}</b>"
                             )
                             
                             if send_telegram_message(msg):
@@ -529,8 +530,8 @@ def main_loop():
                         f"💸 Quota <b>{team_label}</b> ({team_name}):\n"
                         f"<b>{st.baseline:.2f}</b> → <b>{scorer_price:.2f}</b>\n"
                         f"📈 <b>+{delta:.2f}</b> (+{pct:.1f}%)\n\n"
-                        f"⏰ <b>GIOCA: OVER 1.5 HT</b> ⏰\n"
-                        f"💰 <b>Stake: €{STAKE}</b>"
+                        f"<b><u>⏰ GIOCA: OVER 1.5 PRIMO TEMPO ⏰</u></b>\n"
+                        f"💰 <b>Stake: €{STAKE_HT}</b>"
                     )
                     
                     if send_telegram_message(msg):
@@ -565,19 +566,20 @@ def main():
     logger.info("="*60)
     logger.info("🚀 BOT HT RECOVERY FINALE")
     logger.info("="*60)
-    logger.info("   1️⃣ Goal + VARIANZA QUOTE entro %d' → OVER 1.5 HT", GOAL_MINUTE_MAX_HT)
-    logger.info("   2️⃣ HT perso → OVER 2.5 FT")
+    logger.info("   1️⃣ Goal + VARIANZA QUOTE entro %d' → OVER 1.5 PRIMO TEMPO (€%d)", GOAL_MINUTE_MAX_HT, STAKE_HT)
+    logger.info("   2️⃣ HT perso → OVER 2.5 FINALE (€%d)", STAKE_FT)
     logger.info("   📊 Quote: %.2f-%.2f | Max: %.2f", BASELINE_MIN, BASELINE_MAX, MAX_FINAL_QUOTE)
-    logger.info("   📈 Rise: +%.2f | Stake: €%d", MIN_RISE, STAKE)
+    logger.info("   📈 Rise: +%.2f", MIN_RISE)
     logger.info("="*60)
     
     send_telegram_message(
         f"🤖 <b>Bot HT RECOVERY</b> FINALE ⚡\n\n"
-        f"1️⃣ Goal + Quote ↑ <b>entro {GOAL_MINUTE_MAX_HT}'</b> → <b>OVER 1.5 HT</b>\n"
-        f"2️⃣ HT perso → <b>OVER 2.5 FT</b>\n\n"
+        f"1️⃣ Goal + Quote ↑ <b>entro {GOAL_MINUTE_MAX_HT}'</b>\n"
+        f"   → <b>OVER 1.5 PRIMO TEMPO</b> (€{STAKE_HT})\n\n"
+        f"2️⃣ Primo Tempo perso\n"
+        f"   → <b>OVER 2.5 FINALE</b> (€{STAKE_FT})\n\n"
         f"📊 Quote: {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
-        f"📈 Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n"
-        f"💰 Stake: €{STAKE}\n\n"
+        f"📈 Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n\n"
         f"⚠️ Varianza quote DEVE avvenire entro {GOAL_MINUTE_MAX_HT}'\n\n"
         f"🔍 Attivo!"
     )

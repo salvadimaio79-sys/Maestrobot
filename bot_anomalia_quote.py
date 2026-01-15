@@ -36,10 +36,9 @@ WAIT_AFTER_GOAL_SEC = int(os.getenv("WAIT_AFTER_GOAL_SEC", "10"))
 BASELINE_SAMPLES = int(os.getenv("BASELINE_SAMPLES", "2"))
 BASELINE_SAMPLE_INTERVAL = int(os.getenv("BASELINE_SAMPLE_INTERVAL", "6"))
 
-# HT Recovery
+# HT
 GOAL_MINUTE_MAX_HT = int(os.getenv("GOAL_MINUTE_MAX_HT", "25"))
 STAKE_HT = int(os.getenv("STAKE_HT", "20"))
-STAKE_FT = int(os.getenv("STAKE_FT", "40"))
 
 # Rate limiting
 API_CALL_MIN_GAP_MS = int(os.getenv("API_CALL_MIN_GAP_MS", "300"))
@@ -69,8 +68,7 @@ HEADERS = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": RAPIDAPI_HOST}
 class MatchState:
     __slots__ = ("first_seen_at", "first_seen_score", "goal_time", "goal_minute",
                  "scoring_team", "baseline_samples", "baseline", "last_quote", 
-                 "notified", "tries", "last_check", "consecutive_errors", "last_seen_loop",
-                 "sent_ht_alert", "sent_ft_recovery")
+                 "notified", "tries", "last_check", "consecutive_errors", "last_seen_loop")
     
     def __init__(self):
         self.first_seen_at = time.time()
@@ -86,9 +84,6 @@ class MatchState:
         self.last_check = 0
         self.consecutive_errors = 0
         self.last_seen_loop = 0
-        # HT Recovery
-        self.sent_ht_alert = False
-        self.sent_ft_recovery = False
 
 match_state = {}
 _loop = 0
@@ -371,52 +366,6 @@ def main_loop():
                 st.last_seen_loop = _loop
 
                 # ============================================
-                # HT RECOVERY CHECK (45+)
-                # ============================================
-                if st.sent_ht_alert and not st.sent_ft_recovery:
-                    if current_minute >= 45:
-                        # Usa HT score dall'API se disponibile
-                        ht_total = ht_score[0] + ht_score[1] if ht_score != (0, 0) else 0
-                        
-                        # Se HT score non disponibile (0-0) ma siamo a 45'+
-                        # USA LO SCORE LIVE CORRENTE come HT score
-                        if ht_total == 0 and current_minute >= 45:
-                            ht_total = cur_score[0] + cur_score[1]
-                            ht_score = cur_score  # Aggiorna per il messaggio
-                            logger.info("📊 HT Score non disponibile - uso live: %d-%d", 
-                                       cur_score[0], cur_score[1])
-                        
-                        # Se HT < 2 goal → RECOVERY
-                        if ht_total < 2 and ht_total > 0:
-                            st.sent_ft_recovery = True
-                            
-                            team_name = home if st.scoring_team == "home" else away
-                            team_label = "1" if st.scoring_team == "home" else "2"
-                            
-                            msg = (
-                                f"🔄💎 <b>RECOVERY</b> 💎🔄\n\n"
-                                f"❌ OVER 1.5 PRIMO TEMPO perso\n\n"
-                                f"🏆 {league}\n"
-                                f"⚽ <b>{home}</b> vs <b>{away}</b>\n"
-                                f"📊 Primo Tempo: <b>{ht_score[0]}-{ht_score[1]}</b>\n"
-                                f"📊 Live: <b>{cur_score[0]}-{cur_score[1]}</b> ({current_minute}')\n\n"
-                                f"⚽ Goal 1T: {st.goal_minute}'\n"
-                                f"💸 Team: <b>{team_label}</b> ({team_name})\n\n"
-                                f"<b><u>🎯 GIOCA: OVER 2.5 FINALE 🎯</u></b>\n"
-                                f"💰 <b>Stake: €{STAKE_FT}</b>"
-                            )
-                            
-                            if send_telegram_message(msg):
-                                logger.info("✅ RECOVERY 45'+: %s vs %s | HT %d-%d (<%2) → OVER 2.5 FT", 
-                                           home, away, ht_score[0], ht_score[1])
-                        
-                        # Se HT >= 2 → Vinto! NO RECOVERY
-                        elif ht_total >= 2:
-                            st.sent_ft_recovery = True
-                            logger.info("🎉 HT WON: %s vs %s | HT %d-%d (≥2 goal)", 
-                                       home, away, ht_score[0], ht_score[1])
-
-                # ============================================
                 # GOAL DETECTION
                 # ============================================
                 if st.goal_time is None:
@@ -429,30 +378,41 @@ def main_loop():
                         st.goal_time = now
                         st.goal_minute = current_minute
                         st.scoring_team = "home"
-                        logger.info("⚽ GOAL %d': %s vs %s (1-0) | %s", 
+                        logger.info("⚽ GOAL %d': %s vs %s (1-0) | %s - ATTESA CONFERMA VAR", 
                                    current_minute, home, away, league)
                         continue
                     elif cur_score == (0, 1):
                         st.goal_time = now
                         st.goal_minute = current_minute
                         st.scoring_team = "away"
-                        logger.info("⚽ GOAL %d': %s vs %s (0-1) | %s", 
+                        logger.info("⚽ GOAL %d': %s vs %s (0-1) | %s - ATTESA CONFERMA VAR", 
                                    current_minute, home, away, league)
                         continue
                     else:
                         continue
 
-                # Verify score
+                # VERIFICA GOAL ANCORA VALIDO (dopo wait post-goal)
                 expected = (1, 0) if st.scoring_team == "home" else (0, 1)
                 if cur_score != expected:
+                    # Goal annullato o cambiato score!
+                    if st.goal_time and (now - st.goal_time) > WAIT_AFTER_GOAL_SEC:
+                        logger.warning("🚫 GOAL ANNULLATO: %s vs %s (era %s, ora %d-%d)", 
+                                      home, away, expected, cur_score[0], cur_score[1])
+                        st.notified = True  # Skip questo match
                     continue
 
                 if st.notified:
                     continue
 
-                # Wait post-goal
+                # Wait post-goal (CONFERMA VAR)
                 if now - st.goal_time < WAIT_AFTER_GOAL_SEC:
+                    # Ancora in attesa conferma
                     continue
+                
+                # Goal confermato! Log solo la prima volta
+                if st.tries == 0:
+                    logger.info("✅ GOAL CONFERMATO %d': %s vs %s (%d-%d)", 
+                               current_minute, home, away, cur_score[0], cur_score[1])
 
                 # Throttling
                 if now - st.last_check < BASELINE_SAMPLE_INTERVAL:
@@ -564,22 +524,21 @@ def main():
         raise SystemExit("❌ Variabili mancanti")
     
     logger.info("="*60)
-    logger.info("🚀 BOT HT RECOVERY FINALE")
+    logger.info("🚀 BOT OVER 1.5 HT FINALE")
     logger.info("="*60)
-    logger.info("   1️⃣ Goal + VARIANZA QUOTE entro %d' → OVER 1.5 PRIMO TEMPO (€%d)", GOAL_MINUTE_MAX_HT, STAKE_HT)
-    logger.info("   2️⃣ HT perso → OVER 2.5 FINALE (€%d)", STAKE_FT)
+    logger.info("   ⚽ Goal + VARIANZA QUOTE entro %d' → OVER 1.5 PRIMO TEMPO (€%d)", GOAL_MINUTE_MAX_HT, STAKE_HT)
     logger.info("   📊 Quote: %.2f-%.2f | Max: %.2f", BASELINE_MIN, BASELINE_MAX, MAX_FINAL_QUOTE)
     logger.info("   📈 Rise: +%.2f", MIN_RISE)
+    logger.info("   🛡️ Protezione VAR: %ds", WAIT_AFTER_GOAL_SEC)
     logger.info("="*60)
     
     send_telegram_message(
-        f"🤖 <b>Bot HT RECOVERY</b> FINALE ⚡\n\n"
-        f"1️⃣ Goal + Quote ↑ <b>entro {GOAL_MINUTE_MAX_HT}'</b>\n"
+        f"🤖 <b>Bot OVER 1.5 HT</b> FINALE ⚡\n\n"
+        f"⚽ Goal + Quote ↑ <b>entro {GOAL_MINUTE_MAX_HT}'</b>\n"
         f"   → <b>OVER 1.5 PRIMO TEMPO</b> (€{STAKE_HT})\n\n"
-        f"2️⃣ Primo Tempo perso\n"
-        f"   → <b>OVER 2.5 FINALE</b> (€{STAKE_FT})\n\n"
         f"📊 Quote: {BASELINE_MIN:.2f}-{BASELINE_MAX:.2f}\n"
-        f"📈 Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n\n"
+        f"📈 Rise: +{MIN_RISE:.2f} | Max: {MAX_FINAL_QUOTE:.2f}\n"
+        f"🛡️ Protezione VAR: {WAIT_AFTER_GOAL_SEC}s\n\n"
         f"⚠️ Varianza quote DEVE avvenire entro {GOAL_MINUTE_MAX_HT}'\n\n"
         f"🔍 Attivo!"
     )

@@ -477,6 +477,9 @@ def main_loop():
                         st.notified = True
                         continue
                     
+                    # ⚠️ FIX DUPLICATI: Setto notified = True PRIMA dell'invio
+                    st.notified = True
+                    
                     team_name = home if st.scoring_team == "home" else away
                     team_label = "1" if st.scoring_team == "home" else "2"
                     pct = (delta / st.baseline * 100)
@@ -497,9 +500,7 @@ def main_loop():
                     if send_telegram_message(msg):
                         logger.info("✅ ALERT HT %d': %s vs %s | %.2f→%.2f (+%.2f)", 
                                    current_minute, home, away, st.baseline, scorer_price, delta)
-                        
                         st.sent_ht_alert = True
-                        st.notified = True
 
             # Cleanup
             to_remove = [k for k, v in match_state.items() 
